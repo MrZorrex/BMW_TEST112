@@ -1,0 +1,6 @@
+node_modules/
+dist/
+dist-pc/
+publish/
+.DS_Store
+*.log

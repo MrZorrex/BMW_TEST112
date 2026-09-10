@@ -1,0 +1,68 @@
+name: Build Yandex Games release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - arena/01a03a99-bmw-clicker
+
+permissions:
+  contents: write
+
+concurrency:
+  group: yandex-release
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build single-file game
+        run: npm run build
+
+      - name: Validate Yandex package
+        run: |
+          test -f dist/index.html
+          test "$(grep -o 'data:image/jpeg;base64' dist/index.html | wc -l)" -eq 33
+          test "$(du -sm dist | cut -f1)" -lt 100
+
+      - name: Create Yandex Games ZIP
+        run: node scripts/pack.mjs
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bmw-clicker-yandex
+          path: publish/bmw-clicker-yandex.zip
+          if-no-files-found: error
+
+      - name: Move latest-build tag
+        run: |
+          git tag -f latest-build "$GITHUB_SHA"
+          git push origin refs/tags/latest-build --force
+
+      - name: Publish permanent download release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view latest-build >/dev/null 2>&1; then
+            gh release upload latest-build publish/bmw-clicker-yandex.zip --clobber
+            gh release edit latest-build --title "Перекуп BMW — сборка для Яндекс Игр" --notes "Автоматическая актуальная сборка ветки arena/01a03a99-bmw-clicker. Скачайте bmw-clicker-yandex.zip и загрузите архив в черновик Яндекс Игр." --latest
+          else
+            gh release create latest-build publish/bmw-clicker-yandex.zip --title "Перекуп BMW — сборка для Яндекс Игр" --notes "Автоматическая актуальная сборка ветки arena/01a03a99-bmw-clicker. Скачайте bmw-clicker-yandex.zip и загрузите архив в черновик Яндекс Игр." --latest
+          fi
