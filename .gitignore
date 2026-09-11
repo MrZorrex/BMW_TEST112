@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-pc/
+pc-build/
 publish/
 .DS_Store
 *.log

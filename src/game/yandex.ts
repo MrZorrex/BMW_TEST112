@@ -116,10 +116,29 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
  * динамически подгружаем SDK с абсолютного адреса. true — SDK доступен.
  */
 let sdkScriptTried = false;
+
+/**
+ * Нужна ли динамическая догрузка SDK.
+ *
+ * `true` только для продакшен-страницы, загруженной по http(s) — то есть для
+ * интеграции через свой домен/iframe, где `/sdk.js` физически нет (дока:
+ * sdk-about#iframe). В dev-режиме и при открытии файла двойным кликом (file://)
+ * догружать нечего: на официальном локальном запуске Яндекс Игр свой сервер
+ * проксирует /sdk.js, и глобал `YaGames` появляется ещё до этого места.
+ * Без этой отсечки `npm run dev` без доступа к CDN Яндекса стоял бы на заглушке
+ * до 6 с (таймаут скрипта) + 7 с (таймаут init) — а это выглядит как
+ * «SDK некорректно встроено» (п. 1.1), хотя проблема только в локальном окружении.
+ */
+function shouldLoadSdkDynamically(): boolean {
+  if (import.meta.env?.DEV) return false;
+  const proto = typeof location !== "undefined" ? location.protocol : "";
+  return proto === "http:" || proto === "https:";
+}
+
 async function ensureSdkScript(): Promise<boolean> {
   if (typeof window === "undefined") return false;
   if (window.YaGames) return true;
-  if (sdkScriptTried) return !!window.YaGames;
+  if (sdkScriptTried || !shouldLoadSdkDynamically()) return !!window.YaGames;
   sdkScriptTried = true;
   try {
     await withTimeout(

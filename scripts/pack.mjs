@@ -2,9 +2,22 @@ import { deflateRawSync } from "node:zlib";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const sourceDir = "dist";
-const outputDir = "publish";
-const outputFile = path.join(outputDir, "bmw-clicker-yandex.zip");
+// Упаковка папки сборки в ZIP для загрузки в Консоль Яндекс Игр
+// (index.html строго в корне архива — п. 1.22).
+//
+//   node scripts/pack.mjs                                   → publish/bmw-clicker-yandex.zip из dist/
+//   node scripts/pack.mjs --from pc-build --name bmw-clicker-pc.zip
+//
+// Аргументы нужны и для ПК-версии: единый код упаковки, никаких «сам собери zip»
+// (архив, собранный вручную, чаще всего и приводит к отказу «index.html не в корне»).
+const argv = process.argv.slice(2);
+const argOf = (flag, fallback) => {
+  const i = argv.indexOf(flag);
+  return i >= 0 && argv[i + 1] ? argv[i + 1] : fallback;
+};
+const sourceDir = argOf("--from", "dist");
+const outputDir = argOf("--out-dir", "publish");
+const outputFile = path.join(outputDir, argOf("--name", "bmw-clicker-yandex.zip"));
 
 // Small dependency-free ZIP writer. The archive stays below 100 MB and does
 // not need ZIP64, so standard local/central headers are sufficient.
@@ -41,7 +54,7 @@ async function collect(dir, prefix = "") {
 
 const files = await collect(sourceDir);
 if (!files.some((file) => file.relative === "index.html")) {
-  throw new Error("dist/index.html is missing; run npm run build first.");
+  throw new Error(`index.html is missing in ${sourceDir}/; run the build first (npm run build).`);
 }
 
 const localParts = [];

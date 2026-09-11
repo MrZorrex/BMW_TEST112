@@ -32,6 +32,34 @@ try {
   report();
 }
 
+// ── 0. Исходник index.html — это точка входа Vite, а не собранный файл ────
+// Отдельная проверка, потому что именно так рождается отказ «SDK не встроено»:
+// в корень репозитория попал СОБРАННЫЙ pc-build/index.html (SDK из него вырезан),
+// Vite использовал его как точку входа — и каждая сборка для Яндекса выходила
+// без тега /sdk.js, независимо от того, насколько правильно написан src/game/yandex.ts.
+const srcFile = path.join(root, "index.html");
+try {
+  const src = await readFile(srcFile, "utf8");
+  check("index.html (исходник) существует", true);
+  check(
+    "в исходном index.html подключён SDK (<script src=\"/sdk.js\">)",
+    /<script[^>]*src="\/sdk\.js"[^>]*><\/script>/.test(src),
+    "Vite переносит содержимое <head> в сборку 1:1: нет тега здесь — нет тега в dist"
+  );
+  check(
+    "исходный index.html ссылается на src/main.tsx",
+    /<script[^>]*type="module"[^>]*src="[^"]*\/src\/main\.tsx"/.test(src),
+    "точка входа сборки; её отсутствие означает, что в корень положен собранный файл"
+  );
+  check(
+    "исходный index.html не является артефактом сборки",
+    src.length < 200_000,
+    `размер ${src.length} байт — похоже, сюда сохранили собранный single-file (он без SDK)`
+  );
+} catch {
+  check("index.html (исходник) существует", false, "без него `vite build` не соберёт игру");
+}
+
 const headEnd = html.indexOf("</head>");
 const head = headEnd >= 0 ? html.slice(0, headEnd) : html;
 
