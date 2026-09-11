@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Картинки игры — бинарные файлы: EOL-нормализация их бы испортила
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.webp binary

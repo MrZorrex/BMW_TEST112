@@ -19,10 +19,14 @@ const tmpDir = path.join(root, "dist-pc");
 const outDir = path.join(root, "pc-build");
 const outFile = path.join(outDir, "index.html");
 
-console.log("▸ Собираю игру (vite build)…");
+console.log("▸ Собираю игру (vite build, один файл)…");
+// SINGLE_FILE=1 — весь JS, CSS и картинки инлайнятся в index.html: ПК-версию
+// открывают двойным кликом, поэтому рядом не должно требоваться ни одного файла.
+// Релиз для Яндекс Игр собирается БЕЗ этого флага (index.html + папка assets/).
 await execFileAsync(process.execPath, ["./node_modules/vite/bin/vite.js", "build", "--outDir", "dist-pc", "--emptyOutDir"], {
   cwd: root,
   windowsHide: true,
+  env: { ...process.env, SINGLE_FILE: "1" },
 });
 
 const files = await readdir(tmpDir);
@@ -42,23 +46,27 @@ if (html.length === before) {
   console.warn("! Тег SDK Яндекс Игр не найден — возможно, index.html изменился. Продолжаю как есть.");
 }
 
-// Отключаем динамическую догрузку SDK (ensureSdkScript в src/game/yandex.ts):
-// подменяем абсолютный URL пустышкой data:, чтобы ПК-версия вообще не ходила
-// в сеть и сразу стартовала в офлайн-режиме — без задержки и без кнопок рекламы
-// (на file:// они всё равно нерабочие). Пустой скрипт мгновенно даёт onload,
-// window.YaGames остаётся undefined — игра честно считает себя офлайн.
-const ABS_SDK_URL = "https://sdk.games.s3.yandex.net/sdk.js";
-const OFFLINE_SDK_STUB = "data:text/javascript,void 0";
-// Заменяем ВСЕ вхождения: ссылка живёт в ensureSdkScript (src/game/yandex.ts), но
-// может упомянуться и в комментарии index.html — в сеть не должно уйти ничего.
-const absCount = html.split(ABS_SDK_URL).length - 1;
-if (absCount === 0) {
+// Проверяем, что в сеть файл не пойдёт вовсе. Раньше здесь подменяли абсолютный
+// адрес SDK пустышкой; теперь абсолютного адреса в бандле нет вообще — он удалён
+// из исходников, потому что автопроверка Яндекс Игр считает домен внутреннего
+// хранилища сервиса посторонней ссылкой (см. SDK_ABS_URL в src/game/yandex.ts).
+// Заодно это страхует офлайн-версию: на file:// без интернета любой внешний
+// запрос — это лишняя задержка на старте.
+const NEUTRAL_URLS = [
+  "http://www.w3.org/2000/svg", // пространство имён SVG (xmlns), запросом не является
+  "http://www.w3.org/1999/xlink",
+  "http://www.w3.org/XML/1998/namespace",
+  "http://www.w3.org/1998/Math/MathML",
+  "https://react.dev/errors/", // текст сообщения об ошибке React
+];
+const external = [...new Set([...html.matchAll(/https?:\/\/[^\s"'`)<>\]]+/g)].map((m) => m[0]))].filter(
+  (u) => !NEUTRAL_URLS.some((n) => u.startsWith(n))
+);
+if (external.length > 0) {
   throw new Error(
-    `В бандле не найдена ссылка ${ABS_SDK_URL} (ensureSdkScript в src/game/yandex.ts) — ` +
-      "возможно, интеграция SDK изменилась. ПК-сборка остановлена, чтобы не отдать урезанный файл."
+    "В ПК-сборке остались внешние адреса, а офлайн-версия не должна ходить в сеть: " + external.join(", ")
   );
 }
-html = html.split(ABS_SDK_URL).join(OFFLINE_SDK_STUB);
 
 // Помечаем файл как ПК-версию — крупно, чтобы его случайно не загрузили
 // в Консоль Яндекс Игр: здесь НЕТ SDK, такой файл получит отказ по п. 1.1.
@@ -71,7 +79,7 @@ html = html.replace(
 // Проверки для запуска через file://
 const problems = [];
 if (/src="\//.test(html) || /href="\//.test(html)) problems.push("найдены абсолютные пути src=\"/…\" / href=\"/…\"");
-if (/yandex\.ru\/games\/sdk/.test(html) || /src="\/sdk\.js"/.test(html) || html.includes(ABS_SDK_URL))
+if (/yandex\.ru\/games\/sdk/.test(html) || /src="\/sdk\.js"/.test(html))
   problems.push("осталась ссылка на SDK Яндекс Игр");
 if (/\/src\/main\.tsx/.test(html)) problems.push("осталась ссылка на исходник /src/main.tsx (сборка не инлайнилась)");
 if (problems.length > 0) {

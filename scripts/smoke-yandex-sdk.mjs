@@ -35,11 +35,63 @@ try {
   process.exit(1);
 }
 
-// jsdom не исполняет <script type="module">. Сборка singlefile — самодостаточный
-// скрипт без import/export, поэтому для теста достаточно снять атрибут.
-if (/<script[^>]*type="module"/.test(html)) {
-  html = html.replace(/<script([^>]*?)type="module"[^>]*>/, "<script$1>");
+// Адрес, «на котором» играет тест. Часть логики ориентируется на хост, а игра
+// раздаётся из вложенной папки — именно так это и устроено на платформе.
+const PAGE_URL = "https://yandex.ru/games/app/123456/";
+
+/**
+ * jsdom не исполняет <script type="module">, поэтому бандл подставляется
+ * инлайном обычным скриптом.
+ *
+ * Релиз для Яндекс Игр — многофайловая сборка (index.html + assets/…): скрипт
+ * лежит рядом отдельным файлом и является ES-модулем. Из модуля jsdom-у
+ * доступны только две вещи, которых нет в классическом скрипте:
+ *   • import.meta.url — им Vite вычисляет адреса картинок
+ *     (new URL("dixi-<hash>.jpg", import.meta.url).href);
+ *   • верхнеуровневые import/export — их в этом бандле нет, и ниже это проверяется.
+ * Так что достаточно подставить вместо import.meta.url адрес, по которому
+ * бандл лежит на платформе, — и все пути к картинкам разрешатся ровно так же,
+ * как у игрока в браузере.
+ */
+function inlineBundle(source) {
+  const isModule = /<script[^>]*type="module"/.test(source);
+  if (!isModule) return source; // уже инлайн (single-file сборка для ПК)
+
+  const tag = source.match(/<script[^>]*type="module"[^>]*>/);
+  const srcAttr = tag?.[0].match(/\ssrc="([^"]+)"/)?.[1];
+  if (!srcAttr) return source.replace(/<script([^>]*?)type="module"[^>]*>/, "<script$1>");
+
+  const bundlePath = path.resolve(path.dirname(target), srcAttr);
+  let js;
+  try {
+    js = readFileSync(bundlePath, "utf8");
+  } catch {
+    console.error(`✖ index.html ссылается на ${srcAttr}, но файла нет: ${bundlePath}`);
+    process.exit(1);
+  }
+
+  // Адрес бандла НА ПЛАТФОРМЕ, а не на диске: картинки должны разрешаться
+  // относительно своей папки в игре (…/123456/assets/…), как у игрока.
+  const deployedUrl = PAGE_URL + srcAttr.replace(/^\.\//, "");
+  js = js.replace(/import\.meta\.url/g, JSON.stringify(deployedUrl));
+  if (/import\.meta/.test(js)) {
+    console.error("✖ В бандле осталось import.meta — jsdom его не выполнит. Тест остановлен.");
+    process.exit(1);
+  }
+  if (/^\s*(import|export)[\s{*]/m.test(js)) {
+    console.error("✖ В бандле остались верхнеуровневые import/export — jsdom не исполняет ES-модули. Тест остановлен.");
+    process.exit(1);
+  }
+
+  // Ссылку на CSS убираем: jsdom не грузит внешние ресурсы, а на логику
+  // стили не влияют. Тег модуля заменяем инлайном с телом бандла.
+  return source
+    .replace(/<link[^>]*rel="stylesheet"[^>]*>\s*/g, "")
+    .replace(/<script[^>]*type="module"[^>]*><\/script>/, () => `<script>${js}</script>`);
 }
+
+html = inlineBundle(html);
+
 
 const calls = [];
 /** Spy, который ОДНОВРЕМЕННО помнит о вызове и отдаёт мок-значение (иначе
@@ -122,7 +174,7 @@ const dom = new JSDOM(html, {
   pretendToBeVisual: true,
   // Домен платформы: часть логики (например, автопоказ стартовой рекламы)
   // ориентируется на хост.
-  url: "https://yandex.ru/games/app/123456/",
+  url: PAGE_URL,
   beforeParse(window) {
     window.YaGames = {
       init: async (opts) => {
@@ -139,7 +191,13 @@ const dom = new JSDOM(html, {
     const RealImage = window.Image;
     window.Image = class extends RealImage {
       set src(v) {
-        if (/^https?:/.test(String(v))) network.push(String(v));
+        // Фиксируем ЛЮБОЙ адрес, а не только абсолютный: относительный путь
+        // из чужой папки так же нарушает п. 8.4.2, просто глазами его не видно.
+        try {
+          network.push(String(new window.URL(String(v), window.location.href)));
+        } catch {
+          network.push(String(v));
+        }
         super.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
       }
     };
@@ -249,8 +307,28 @@ check("облачное сохранение: setData (п. 1.9)", has("player.se
 check("надёжное хранилище подключено (getStorage)", sdkStorage.has("bmw-perekup-save-v1"));
 check(
   "внешних запросов, кроме SDK, нет (п. 8.4.2)",
-  network.every((u) => u.includes("/sdk.js")),
+  network.every((u) => u.includes("/sdk.js") || u.startsWith(PAGE_URL)),
   network.join(", ")
+);
+
+// Картинки в отрисованном DOM. Они обязаны лежать в папке самой игры:
+// ни внешних адресов, ни путей «от корня домена» (на платформе игра живёт
+// во вложенной папке, поэтому /models/dixi.jpg уехал бы на yandex.ru/models/…).
+const imgSrcs = [...doc.querySelectorAll("img[src]")]
+  .map((el) => el.getAttribute("src"))
+  .filter((s) => s && !s.startsWith("data:"));
+const resolvedImgs = imgSrcs.map((s) => {
+  try {
+    return new URL(s, PAGE_URL).href;
+  } catch {
+    return s;
+  }
+});
+const foreignImgs = resolvedImgs.filter((u) => !u.startsWith(PAGE_URL));
+check(
+  "картинки грузятся из папки самой игры, а не извне",
+  imgSrcs.length > 0 && foreignImgs.length === 0,
+  imgSrcs.length === 0 ? "в отрисованном DOM нет ни одного <img> — тест ничего не проверил" : foreignImgs.join(", ")
 );
 
 for (const p of passes) console.log(`  ✔ ${p}`);
