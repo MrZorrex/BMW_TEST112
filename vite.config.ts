@@ -71,8 +71,10 @@ const stripExternalRefs: PluginOption = {
   generateBundle(_options, bundle) {
     for (const item of Object.values(bundle)) {
       if (item.type !== "chunk") continue;
-      // Минифицированные ошибки React: «visit https://react.dev/errors/310…».
-      item.code = item.code.replace(/https?:\/\/react\.dev\//g, "react.dev/");
+      // Минифицированные ошибки React содержат «visit https://react.dev/errors/310…».
+      // Вырезаем домен целиком, вместе со схемой: код ошибки (#310) в сообщении
+      // остаётся, а постороннего адреса в релизном файле больше нет.
+      item.code = item.code.replace(/(?:https?:\/\/)?react\.dev\//g, "react-errors/");
     }
   },
 };

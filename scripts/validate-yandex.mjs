@@ -95,9 +95,11 @@ const STORAGE_HOSTS =
   /(^|\.)(s3|storage)\.[a-z0-9.-]*(yandex|yandexcloud|amazonaws|googleapis|windows\.net)/i;
 const foundStorage = [];
 const allUrls = new Map(); // url -> файлы, где встречается
+const fileTexts = new Map(); // файл -> содержимое (нужно проверкам ниже)
 
 for (const file of textFiles) {
   const text = file.relative === "index.html" ? html : await readFile(file.absolute, "utf8");
+  fileTexts.set(file.relative, text);
   for (const m of text.matchAll(/https?:\/\/[^\s"'`)<>\]]+/g)) {
     const url = m[0];
     if (!allUrls.has(url)) allUrls.set(url, new Set());
@@ -160,6 +162,12 @@ check(
   !/<!--[\s\S]*?-->/.test(html),
   "stripExternalRefs в vite.config.ts должен их вырезать"
 );
+
+// ── 2в. Домен react.dev в тексте минифицированных ошибок React ───
+// stripExternalRefs вырезает его из бандла вместе со схемой. Если он вернулся
+// (обновился React, плагин отключили) — это регрессия: в файле снова посторонний домен.
+const withReactDev = [...fileTexts].filter(([, t]) => /react\.dev/.test(t)).map(([f]) => f);
+check("в сборке нет домена react.dev", withReactDev.length === 0, withReactDev.join(", "));
 
 // ── 3. Тег SDK (п. 1.1, 1.19.1) ──────────────────────────────
 const headEnd = html.indexOf("</head>");
