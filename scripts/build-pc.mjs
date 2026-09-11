@@ -49,14 +49,16 @@ if (html.length === before) {
 // window.YaGames остаётся undefined — игра честно считает себя офлайн.
 const ABS_SDK_URL = "https://sdk.games.s3.yandex.net/sdk.js";
 const OFFLINE_SDK_STUB = "data:text/javascript,void 0";
+// Заменяем ВСЕ вхождения: ссылка живёт в ensureSdkScript (src/game/yandex.ts), но
+// может упомянуться и в комментарии index.html — в сеть не должно уйти ничего.
 const absCount = html.split(ABS_SDK_URL).length - 1;
-if (absCount !== 1) {
+if (absCount === 0) {
   throw new Error(
-    `Ожидалась ровно 1 ссылка ${ABS_SDK_URL} в бандле (ensureSdkScript), найдено: ${absCount} — ` +
-      "возможно, src/game/yandex.ts изменился. ПК-сборка остановлена, чтобы не уйти в сеть."
+    `В бандле не найдена ссылка ${ABS_SDK_URL} (ensureSdkScript в src/game/yandex.ts) — ` +
+      "возможно, интеграция SDK изменилась. ПК-сборка остановлена, чтобы не отдать урезанный файл."
   );
 }
-html = html.replace(ABS_SDK_URL, OFFLINE_SDK_STUB);
+html = html.split(ABS_SDK_URL).join(OFFLINE_SDK_STUB);
 
 // Помечаем файл как ПК-версию — крупно, чтобы его случайно не загрузили
 // в Консоль Яндекс Игр: здесь НЕТ SDK, такой файл получит отказ по п. 1.1.

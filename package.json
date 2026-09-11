@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:pc": "node scripts/build-pc.mjs",
     "validate:yandex": "node scripts/validate-yandex.mjs",
-    "build:yandex": "vite build && node scripts/validate-yandex.mjs && node scripts/pack.mjs && node scripts/validate-yandex.mjs --zip publish/bmw-clicker-yandex.zip",
+    "test:yandex": "node scripts/smoke-yandex-sdk.mjs",
+    "build:yandex": "vite build && node scripts/validate-yandex.mjs && node scripts/smoke-yandex-sdk.mjs && node scripts/pack.mjs && node scripts/validate-yandex.mjs --zip publish/bmw-clicker-yandex.zip",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -27,6 +28,7 @@
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.1.1",
+    "jsdom": "^27.4.0",
     "sharp": "^0.35.4",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",

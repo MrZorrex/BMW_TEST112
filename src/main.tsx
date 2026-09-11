@@ -2,9 +2,33 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App";
-import { cloudLoad, getSdkLang, initYandex, onSdkLang, setCloudSnapshot, withTimeout } from "./game/yandex";
+import { cloudLoad, getSdkLang, initYandex, loadingReady, onSdkLang, setCloudSnapshot, withTimeout } from "./game/yandex";
 import { SAVE_KEY } from "./game/useGame";
 import { applyLangToDocument, readLocalLangSave, resolveStartLang } from "./i18n";
+
+/**
+ * Страховка для п. 1.19.2 (`LoadingAPI.ready()`).
+ * Готовность заявляет App в эффекте, но если запуск или первый рендер упадут,
+ * платформа так и не получит ready(): лоадер крутится вечно, а в логе модерации
+ * это выглядит как «SDK некорректно встроено» (п. 1.1). Поэтому при любой
+ * непойманной ошибке и по аварийному таймеру готовность сообщаем в любом случае
+ * — метод идемпотентен, повторных вызовов SDK не боится.
+ */
+function armReadyFallback() {
+  if (typeof window === "undefined") return;
+  const fail = () => {
+    try {
+      loadingReady();
+    } catch {
+      /* уже заявлена или платформы нет */
+    }
+  };
+  window.addEventListener("error", fail);
+  window.addEventListener("unhandledrejection", fail);
+  setTimeout(fail, 15000);
+}
+
+armReadyFallback();
 
 /**
  * Порядок запуска:
