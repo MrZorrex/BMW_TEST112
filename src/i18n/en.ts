@@ -153,7 +153,7 @@ export const en: Dict = {
     goFurther: "KEEP FLIPPING",
   },
   premium: {
-    overTitle: "Yandex Games · In-app purchases",
+    overTitle: "Premium shop",
     title: "PRO FLIPPER'S OFFICE",
     loginText: "Sign in with Yandex ID — purchases and progress will sync across all your devices.",
     loginBtn: "SIGN IN",
@@ -168,7 +168,7 @@ export const en: Dict = {
   timeline: {
     collection: "Collection",
     era: "Era",
-    emptyTitle: "{era}: civilian car production paused",
+    emptyTitle: "{era}: no new models in the collection",
     emptyPassed: " (passed)",
     eraProgress: "{era}: {o}/{c}",
   },
@@ -179,6 +179,7 @@ export const en: Dict = {
   app: {
     offlineTitle: "While you were away",
     offlineGain: "+{x} earned",
+    offlineOk: "COLLECT",
     prestigeTitle: "SELL THE COLLECTION?",
     prestigeBody:
       "The whole garage, upgrades and lucky cards burn down. But you’ll earn the “Seasoned Collector” title and a permanent bonus for the new lap.",
@@ -218,11 +219,11 @@ export const en: Dict = {
       },
       bmw328: {
         era: "1930s",
-        desc: "The legendary roadster that stormed the Mille Miglia. A pre-war motorsport icon and the marque's first racing legend.",
+        desc: "The legendary roadster that stormed the Mille Miglia. A 1930s motorsport icon and the marque's first racing legend.",
       },
       bmw335: {
         era: "1930s",
-        desc: "A full-size flagship with a 3.5L straight-six — the most powerful pre-war BMW.",
+        desc: "A full-size flagship with a 3.5L straight-six — the most powerful BMW of the 1930s.",
       },
       isetta: {
         era: "1950s",
@@ -230,7 +231,7 @@ export const en: Dict = {
       },
       bmw502: {
         era: "1950s",
-        desc: "The “Baroque Angel” — the first post-war German car with a V8. Luxury of the recovery era.",
+        desc: "The “Baroque Angel” — a luxurious 1950s saloon and the first BMW with a V8 engine.",
       },
       bmw507: {
         era: "1950s",
@@ -307,7 +308,7 @@ export const en: Dict = {
       showroom: { name: "Ring-road dealership", flavor: "Coffee, leather, 5-minute loans" },
       network: { name: "Dealer network", flavor: "Showrooms in three cities" },
       import: { name: "Import from Europe", flavor: "We bring them in to order" },
-      export: { name: "Export to Dubai", flavor: "Sheikhs take two" },
+      export: { name: "Export to Dubai", flavor: "They buy without haggling" },
       nephew: { name: "Nephew with a mouse", flavor: "Works for pizza" },
       button2000: { name: "Auto-Button 2000", flavor: "Heavy, but honest" },
       robot: { name: "Flipper robot", flavor: "Never sleeps, never panics" },

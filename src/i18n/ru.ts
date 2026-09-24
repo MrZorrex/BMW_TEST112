@@ -157,7 +157,7 @@ export const ru = {
     goFurther: "ПОГНАЛИ ДАЛЬШЕ",
   },
   premium: {
-    overTitle: "Яндекс Игры · Инап-покупки",
+    overTitle: "Премиум-магазин",
     title: "ОФИС ПРОДВИНУТОГО ПЕРЕКУПА",
     loginText: "Войдите через Яндекс ID — покупки и прогресс сохранятся на всех ваших устройствах.",
     loginBtn: "ВОЙТИ",
@@ -172,7 +172,7 @@ export const ru = {
   timeline: {
     collection: "Коллекция",
     era: "Эпоха",
-    emptyTitle: "{era}: выпуск гражданских машин приостановлен",
+    emptyTitle: "{era}: новых моделей в коллекции нет",
     emptyPassed: " (пройдено)",
     eraProgress: "{era}: {o}/{c}",
   },
@@ -183,6 +183,7 @@ export const ru = {
   app: {
     offlineTitle: "Пока вас не было",
     offlineGain: "+{x} заработано",
+    offlineOk: "ЗАБРАТЬ",
     prestigeTitle: "ПРОДАТЬ КОЛЛЕКЦИЮ?",
     prestigeBody:
       "Весь гараж, прокачка и карты удачи сгорают. Но ты получишь звание «Опытный коллекционер» и постоянный бонус на новый круг.",

@@ -54,7 +54,7 @@ export const MODELS: CarModel[] = [
     price: 1800,
     img: A("/models/bmw328.jpg"),
     tint: "#c9d4e0",
-    desc: "Легендарный родстер, громивший Mille Miglia. Икона довоенного автоспорта и первая гоночная легенда марки.",
+    desc: "Легендарный родстер, громивший Mille Miglia. Икона автоспорта 1930-х и первая гоночная легенда марки.",
   },
   {
     id: "bmw335",
@@ -66,7 +66,7 @@ export const MODELS: CarModel[] = [
     price: 14000,
     img: A("/models/bmw335.jpg"),
     tint: "#3f7d5d",
-    desc: "Полноразмерный флагман с 3,5-литровой «шестёркой» — самый мощный довоенный BMW.",
+    desc: "Полноразмерный флагман с 3,5-литровой «шестёркой» — самый мощный BMW 1930-х.",
   },
   {
     id: "isetta",
@@ -90,7 +90,7 @@ export const MODELS: CarModel[] = [
     price: 480_000,
     img: A("/models/bmw502.jpg"),
     tint: "#7fa8d9",
-    desc: "«Барочный ангел» — первый послевоенный немецкий автомобиль с V8. Роскошь эпохи восстановления.",
+    desc: "«Барочный ангел» — роскошный седан 1950-х и первый BMW с мотором V8.",
   },
   {
     id: "bmw507",
@@ -369,14 +369,14 @@ export const CLICK_UPGRADES: UpgradeDef[] = [
 ];
 
 export const AUTO_UPGRADES: UpgradeDef[] = [
-  { id: "avito", name: "Объявление на Авито", flavor: "«Не битый, не крашеный»", pct: 0.06, cost: 260, growth: 4.6, icon: "Megaphone" },
+  { id: "avito", name: "Объявление в интернете", flavor: "«Не битый, не крашеный»", pct: 0.06, cost: 260, growth: 4.6, icon: "Megaphone" },
   { id: "student", name: "Студент-наводчик", flavor: "Приводит клиентов за процент", pct: 0.11, cost: 5600, growth: 4.7, icon: "GraduationCap" },
   { id: "market", name: "Свой человек на рынке", flavor: "Знает, кому что впарить", pct: 0.18, cost: 88_000, growth: 4.8, icon: "Handshake" },
   { id: "manager", name: "Менеджер по продажам", flavor: "Продаёт даже зимой", pct: 0.32, cost: 1_500_000, growth: 4.9, icon: "Briefcase" },
   { id: "showroom", name: "Автосалон у МКАД", flavor: "Кофе, кожа, кредит за 5 минут", pct: 0.6, cost: 28_000_000, growth: 5.0, icon: "Store" },
   { id: "network", name: "Дилерская сеть", flavor: "Салоны в трёх городах", pct: 1.1, cost: 520_000_000, growth: 5.1, icon: "Network" },
   { id: "import", name: "Импорт из Европы", flavor: "Пригоняем под заказ", pct: 2, cost: 10_000_000_000, growth: 5.2, icon: "Ship" },
-  { id: "export", name: "Экспорт в Дубай", flavor: "Шейхи берут два", pct: 3.6, cost: 180_000_000_000, growth: 5.3, icon: "Plane" },
+  { id: "export", name: "Экспорт в Дубай", flavor: "Покупают не торгуясь", pct: 3.6, cost: 180_000_000_000, growth: 5.3, icon: "Plane" },
 ];
 
 // ── Автокликер ────────────────────────────────────────────────

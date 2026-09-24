@@ -21,7 +21,7 @@ import {
   type UpgradeDef,
 } from "../data/game";
 import { setSoundEnabled, sfxBuy, sfxWin } from "./sound";
-import { cloudSave, getCloudSnapshot, getSdkLang } from "./yandex";
+import { cloudSave, getCloudSnapshot, getPlayerId, getSdkLang, withTimeout } from "./yandex";
 import { pinLangFor, resolveStartLang, type Lang } from "../i18n";
 import { CASH_PILE_FALLBACK_BASE_MULT, CASH_PILE_SHARE, VIP_PERK_BONUS, VIP_PERK_ID } from "../data/products";
 
@@ -95,32 +95,61 @@ const initialState = (): GameState => ({
   grantedTokens: {},
 });
 
-function readLocal(): Partial<GameState> | null {
+/** Сохранение = состояние + служебные поля записи. */
+type SaveData = Partial<GameState> & {
+  /** Время записи (мс). По нему выбирается самое свежее сохранение. */
+  savedAt?: number;
+  /** id игрока, которому принадлежит запись (гость или аккаунт Яндекса). */
+  owner?: string;
+};
+
+/** Облако: не чаще раза в 5 с после действий (лимит setData — 100 запросов за 5 мин). */
+const CLOUD_GAP_MS = 5_000;
+/** Облако без действий игрока (деньги от кликов и пассива) — раз в 20 с. */
+const CLOUD_IDLE_MS = 20_000;
+/** Локальная копия денег от кликов и пассива. */
+const LOCAL_EVERY_MS = 2_000;
+/** Оффлайн-доход и приветствие «Пока вас не было» — только после отсутствия от минуты. */
+const OFFLINE_MIN_SECS = 60;
+
+function readLocal(): SaveData | null {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    return raw ? (JSON.parse(raw) as Partial<GameState>) : null;
+    return raw ? (JSON.parse(raw) as SaveData) : null;
   } catch {
     return null;
   }
 }
 
+const savedTime = (d: SaveData) => (typeof d.savedAt === "number" ? d.savedAt : (d.lastSeen ?? 0));
+
 /**
- * Прогресс берётся из облака Яндекс Игр (если игрок его имеет) или из локального
- * хранилища — выигрывает более «продвинутое» сохранение. Гостевой режим работает так же.
+ * Какое сохранение брать при запуске (п. 1.9, 1.13.3):
+ * - есть только одно — его;
+ * - локальная копия принадлежит другому игроку (смена аккаунта на этом
+ *   устройстве) — верим облаку текущего игрока;
+ * - иначе — более свежее по времени записи.
+ * Сравнивать «по прогрессу» (totalEarned) нельзя: покупка машины или прокачки
+ * его не меняет, а новый круг обнуляет — и свежий локальный сейв проигрывал бы
+ * облаку 20-секундной давности, откатывая покупки после обновления страницы.
  */
+function pickSave(local: SaveData | null, cloud: SaveData | null): SaveData | null {
+  if (!local || !cloud) return local ?? cloud;
+  const me = getPlayerId();
+  if (me && local.owner && local.owner !== me) return cloud;
+  return savedTime(local) > savedTime(cloud) ? local : cloud;
+}
+
+/** Прогресс берётся из облака Яндекс Игр или из локального хранилища — см. pickSave. Гостевой режим работает так же. */
 function loadState(): { state: GameState; isFresh: boolean } {
   const base = initialState();
   const local = readLocal();
-  const cloud = getCloudSnapshot() as Partial<GameState> | null;
+  const cloud = getCloudSnapshot() as SaveData | null;
 
-  let best: Partial<GameState> | null = null;
-  if (local && cloud) {
-    best = (cloud.totalEarned ?? 0) >= (local.totalEarned ?? 0) ? cloud : local;
-  } else {
-    best = cloud ?? local;
-  }
-
+  const best = pickSave(local, cloud);
   if (!best) return { state: base, isFresh: true };
+  // служебные поля записи в состояние игры не попадают
+  const { savedAt: _savedAt, owner: _owner, ...bestState } = best;
 
   // Язык (п. 2.14): из сейва уважаем только ручной выбор игрока (п. 6.9). Если в
   // сейве лежит автоопределённое значение, при следующем запуске язык снова
@@ -132,12 +161,12 @@ function loadState(): { state: GameState; isFresh: boolean } {
   return {
     state: {
       ...base,
-      ...best,
-      modelIndex: Math.min(Math.max(0, best.modelIndex ?? 0), MODELS.length - 1),
+      ...bestState,
+      modelIndex: Math.min(Math.max(0, bestState.modelIndex ?? 0), MODELS.length - 1),
       lang,
       langPinnedOn: pinSource?.langPinnedOn ?? null,
-      grantedTokens: best.grantedTokens ?? {},
-      perks: best.perks ?? {},
+      grantedTokens: bestState.grantedTokens ?? {},
+      perks: bestState.perks ?? {},
     },
     isFresh: false,
   };
@@ -219,7 +248,8 @@ export function useGame() {
     0.75,
     CRIT_BASE_CHANCE + critChanceDef.step * (s.critLv[critChanceDef.id] ?? 0) + critCardPct
   );
-  const critMult = CRIT_BASE_MULT + critPowerDef.step * (s.critLv[critPowerDef.id] ?? 0);
+  // округляем до сотых: 3 + 0.35 × 12 в плавающей точке = 7.199999999999999
+  const critMult = Math.round((CRIT_BASE_MULT + critPowerDef.step * (s.critLv[critPowerDef.id] ?? 0)) * 100) / 100;
 
   const clickPower = useMemo(
     () => model.base * (1 + sumPct(CLICK_UPGRADES, s.clickLv)) * cardMult * boostF * prestigeMult * perkMult,
@@ -252,6 +282,7 @@ export function useGame() {
     const rate = autoCps + botC * clickPow;
     if (rate <= 0) return 0;
     const secs = Math.min(Math.max(0, (Date.now() - st.lastSeen) / 1000), 8 * 3600);
+    if (secs < OFFLINE_MIN_SECS) return 0; // обычное обновление страницы — не «отсутствие»
     return rate * secs * 0.01;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -286,51 +317,167 @@ export function useGame() {
     return () => clearInterval(iv);
   }, []);
 
-  // автосохранение
+  // ── Сохранение прогресса (п. 1.9, 1.11, 1.13.3) ─────────────
+  // Локальная копия пишется синхронно сразу после каждого значимого действия
+  // (эффект по полям прогресса ниже) и каждые 2 с — для денег от кликов и
+  // пассива. Облако Яндекс Игр — сразу после действия, но не чаще раза в 5 с,
+  // плюс при сворачивании, уходе со страницы и смене ориентации.
   const stateRef = useRef(s);
   stateRef.current = s;
+  /** Сохранения выключены: игрок сменил аккаунт, ждём перезагрузки (см. abandonLocal). */
+  const savesOff = useRef(false);
+  const lastCloudAt = useRef(0);
+  const cloudTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const snapshot = useCallback((): SaveData => {
+    const now = Date.now();
+    return { ...stateRef.current, lastSeen: now, savedAt: now, owner: getPlayerId() };
+  }, []);
+
+  const writeLocal = useCallback((snap: SaveData) => {
+    if (savesOff.current) return;
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify(snap));
+    } catch {
+      /* хранилище недоступно — остаётся облако */
+    }
+  }, []);
+
+  const pushCloud = useCallback((snap: SaveData): Promise<void> => {
+    if (savesOff.current) return Promise.resolve();
+    if (cloudTimer.current) {
+      clearTimeout(cloudTimer.current);
+      cloudTimer.current = null;
+    }
+    lastCloudAt.current = Date.now();
+    return cloudSave(snap, true);
+  }, []);
+
+  /** Облако после действия: сразу, если давно не писали, иначе — одним запросом в конце окна. */
+  const scheduleCloud = useCallback(() => {
+    if (cloudTimer.current || savesOff.current) return;
+    const wait = Math.max(0, lastCloudAt.current + CLOUD_GAP_MS - Date.now());
+    cloudTimer.current = setTimeout(() => {
+      cloudTimer.current = null;
+      void pushCloud(snapshot());
+    }, wait);
+  }, [pushCloud, snapshot]);
+
+  // Запрос сохранения из обработчиков выполняется ПОСЛЕ коммита состояния
+  // (эффект ниже): в сейв попадает результат действия, а не состояние до него.
+  const [saveReq, setSaveReq] = useState(0);
+  const syncWaiters = useRef<Array<() => void>>([]);
+
+  /** Сохранить результат текущего действия: локально — сразу, облако — с троттлингом. */
+  const saveNow = useCallback(() => setSaveReq((n) => n + 1), []);
+
+  /**
+   * То же, но облако — немедленно и с ожиданием ответа. Для выдачи инап-покупок:
+   * сначала выдача зафиксирована в данных игрока, потом консумация (п. 1.13.1).
+   */
+  const saveNowAndSync = useCallback(
+    () =>
+      new Promise<void>((resolve) => {
+        syncWaiters.current.push(resolve);
+        setSaveReq((n) => n + 1);
+      }),
+    []
+  );
+
   useEffect(() => {
-    // локальная копия — часто; облако Яндекс Игр — раз в 20 сек (лимит 100 запросов / 5 мин)
-    const save = (toCloud = false, flush = false) => {
-      const snapshot = { ...stateRef.current, lastSeen: Date.now() };
-      try {
-        localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot));
-      } catch { /* noop */ }
-      if (toCloud) void cloudSave(snapshot, flush);
+    if (saveReq === 0) return;
+    const snap = snapshot();
+    writeLocal(snap);
+    const waiters = syncWaiters.current.splice(0);
+    if (waiters.length > 0) {
+      void withTimeout(pushCloud(snap), 6000, "cloud-sync")
+        .catch(() => {})
+        .finally(() => waiters.forEach((w) => w()));
+    } else {
+      scheduleCloud();
+    }
+  }, [saveReq, snapshot, writeLocal, pushCloud, scheduleCloud]);
+
+  // Любое изменение прогресса — покупка машины, прокачка, контейнер, награда за
+  // рекламу, новый круг, выдача инапа, настройки — сразу в сохранение (п. 1.9).
+  // Деньги от кликов и пассива сюда не входят: их пишет частый таймер ниже.
+  const progressBooted = useRef(false);
+  useEffect(() => {
+    if (!progressBooted.current) {
+      progressBooted.current = true;
+      return; // первый рендер — состояние только что загружено
+    }
+    saveNow();
+  }, [
+    s.modelIndex,
+    s.clickLv,
+    s.autoLv,
+    s.botLv,
+    s.critLv,
+    s.caseOpens,
+    s.cards,
+    s.prestige,
+    s.perks,
+    s.grantedTokens,
+    s.adReadyAt,
+    s.boostMult,
+    s.sound,
+    s.introSeen,
+    s.lang,
+    s.langPinnedOn,
+    saveNow,
+  ]);
+
+  useEffect(() => {
+    const ivLocal = setInterval(() => writeLocal(snapshot()), LOCAL_EVERY_MS);
+    const ivCloud = setInterval(() => {
+      if (Date.now() - lastCloudAt.current >= CLOUD_IDLE_MS - 500) void pushCloud(snapshot());
+    }, CLOUD_IDLE_MS);
+
+    // уход со страницы / сворачивание / поворот: локально — всегда, облако —
+    // если есть что отправить (отложенный запрос или прошло больше 2 с)
+    const flush = () => {
+      const snap = snapshot();
+      writeLocal(snap);
+      if (cloudTimer.current || Date.now() - lastCloudAt.current > 2000) void pushCloud(snap);
     };
-
-    const ivLocal = setInterval(() => save(false), 2500);
-    const ivCloud = setInterval(() => save(true), 20_000);
-
     const onHide = () => {
-      if (document.visibilityState === "hidden") save(true, true);
+      if (document.visibilityState === "hidden") flush();
     };
-    const onUnload = () => save(true, true);
-    // п. 1.9 — прогресс не теряется при смене ориентации экрана
-    const onOrient = () => save(true, true);
 
     document.addEventListener("visibilitychange", onHide);
-    window.addEventListener("pagehide", onUnload);
-    window.addEventListener("beforeunload", onUnload);
-    window.addEventListener("orientationchange", onOrient);
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    // п. 1.9 — прогресс не теряется при смене ориентации экрана
+    window.addEventListener("orientationchange", flush);
 
     return () => {
       clearInterval(ivLocal);
       clearInterval(ivCloud);
       document.removeEventListener("visibilitychange", onHide);
-      window.removeEventListener("pagehide", onUnload);
-      window.removeEventListener("beforeunload", onUnload);
-      window.removeEventListener("orientationchange", onOrient);
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+      window.removeEventListener("orientationchange", flush);
     };
-  }, []);
+  }, [snapshot, writeLocal, pushCloud]);
 
-  /** Немедленное сохранение после значимых действий (п. 1.9). */
-  const saveNow = useCallback(() => {
-    const snapshot = { ...stateRef.current, lastSeen: Date.now() };
+  /**
+   * Смена игрового аккаунта (диалог выбора аккаунта, sdk-events): локальную копию
+   * помечаем устаревшей и до перезагрузки больше ничего не пишем — ни локально,
+   * ни в облако. После перезагрузки прогресс берётся из облака выбранного игрока,
+   * а локальная копия остаётся только запасной на случай недоступной сети.
+   */
+  const abandonLocal = useCallback(() => {
+    if (cloudTimer.current) {
+      clearTimeout(cloudTimer.current);
+      cloudTimer.current = null;
+    }
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot));
-    } catch { /* noop */ }
-    void cloudSave(snapshot, true);
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ ...stateRef.current, savedAt: 0, owner: "" }));
+    } catch {
+      /* noop */
+    }
+    savesOff.current = true;
   }, []);
 
   const click = useCallback((): { gain: number; crit: boolean } => {
@@ -499,13 +646,11 @@ export function useGame() {
   /** Начислить наличные (расходная покупка). */
   const grantCash = useCallback((amount: number) => {
     setS((p) => ({ ...p, money: p.money + amount, totalEarned: p.totalEarned + amount }));
-    sfxWin();
   }, []);
 
   /** Активировать постоянный перк (идемпотентно — для постоянных покупок). */
   const grantPerk = useCallback((id: string) => {
     setS((p) => (p.perks[id] ? p : { ...p, perks: { ...p.perks, [id]: 1 } }));
-    sfxWin();
   }, []);
 
   /** Проверка / отметка выданных покупок — защита от двойной выдачи (п. 1.13.1). */
@@ -531,18 +676,6 @@ export function useGame() {
     []
   );
 
-  // Выбор языка — настройка, а не прогресс: пишем сейв сразу после коммита
-  // (в самом setLang нельзя — там состояние ещё старое), не дожидаясь тика
-  // автосейва: игрок мог закрыть вкладку через секунду после переключения.
-  const langBootstrapped = useRef(false);
-  useEffect(() => {
-    if (!langBootstrapped.current) {
-      langBootstrapped.current = true;
-      return; // первый рендер — язык пришёл из сейва/SDK, сохранять нечего
-    }
-    saveNow();
-  }, [s.lang, s.langPinnedOn, saveNow]);
-
   const canPrestige = s.modelIndex === MODELS.length - 1;
 
   const prestigeReset = useCallback(() => {
@@ -552,6 +685,8 @@ export function useGame() {
       lang: p.lang,
       langPinnedOn: p.langPinnedOn,
       grantedTokens: p.grantedTokens,
+      // постоянные инап-перки переживают новый круг — так обещает описание товара (п. 1.13.5)
+      perks: p.perks,
       introSeen: true,
       prestige: p.prestige + 1,
     }));
@@ -562,12 +697,18 @@ export function useGame() {
   const markIntroSeen = useCallback(() => setS((p) => ({ ...p, introSeen: true })), []);
 
   const reset = useCallback(() => {
-    try {
-      localStorage.removeItem(SAVE_KEY);
-    } catch { /* noop */ }
-    // язык и отметка о ручном выборе — настройки, а не прогресс: переживают полный сброс
-    setS((p) => ({ ...initialState(), lang: p.lang, langPinnedOn: p.langPinnedOn }));
-  }, []);
+    // Язык и ручной выбор языка — настройки, а постоянные перки и отметки
+    // выданных покупок — оплаченные товары, а не прогресс: всё это переживает
+    // полный сброс. Новое состояние сразу уходит в сохранение (локально и в облако).
+    setS((p) => ({
+      ...initialState(),
+      lang: p.lang,
+      langPinnedOn: p.langPinnedOn,
+      perks: p.perks,
+      grantedTokens: p.grantedTokens,
+    }));
+    saveNow();
+  }, [saveNow]);
 
   const totalCardPct = useMemo(
     () => CARDS.reduce((acc, c) => acc + c.pct * (s.cards[c.id] ?? 0), 0),
@@ -597,6 +738,8 @@ export function useGame() {
     isFresh: loaded.isFresh,
     click,
     saveNow,
+    saveNowAndSync,
+    abandonLocal,
     perkMult,
     cashPileAmount,
     grantCash,

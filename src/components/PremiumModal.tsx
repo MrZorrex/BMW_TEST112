@@ -26,8 +26,8 @@ export default function PremiumModal({
   game: ReturnType<typeof useGame>;
   playerAuthorized: boolean;
   onClose: () => void;
-  /** вызывается после успешной выдачи — App сохранит прогресс (п. 1.9/1.13.3) */
-  onSynced: () => void;
+  /** вызывается после выдачи — сохраняет прогресс локально и в облако, с ожиданием (п. 1.9/1.13.3) */
+  onSynced: () => Promise<void> | void;
 }) {
   const { t, lang } = useI18n();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -36,11 +36,15 @@ export default function PremiumModal({
   const [owned, setOwned] = useState<Record<string, boolean>>({});
   const [authorized, setAuthorized] = useState(playerAuthorized);
 
-  // постоянные покупки, уже активные у игрока (п. 1.13.1 — проверка необработанных)
+  // постоянные покупки, уже активные у игрока. Расходные сюда не попадают:
+  // неконсумированная «Горсть наличных» — это не «куплено навсегда».
   useEffect(() => {
     void listPurchases().then((list) => {
       const map: Record<string, boolean> = {};
-      for (const p of list) map[p.productID] = true;
+      for (const p of list) {
+        const meta = productMetaById(p.productID);
+        if (meta?.kind === "permanent" || p.productID === VIP_PERK_ID) map[p.productID] = true;
+      }
       setOwned(map);
     });
   }, []);
@@ -71,10 +75,10 @@ export default function PremiumModal({
         game.grantCash(game.cashPileAmount());
       }
       game.markTokenGranted(purchase.purchaseToken);
-      // сначала фиксируем выдачу в данных игрока, потом консумируем (п. 1.13.1):
-      // если сеть оборвётся, стартовая проверка не выдаст товар повторно
-      await new Promise((r) => setTimeout(r, 60));
-      onSynced();
+      // сначала фиксируем выдачу в данных игрока (локально и в облаке), потом
+      // консумируем (п. 1.13.1): если сеть оборвётся, стартовая проверка не
+      // выдаст товар повторно, а после обновления страницы покупка на месте
+      await onSynced();
       // расходные покупки консумируем сразу после выдачи (п. 1.13.1)
       if (meta?.kind !== "permanent") {
         await consumeProduct(purchase.purchaseToken);
@@ -153,7 +157,8 @@ export default function PremiumModal({
 
           {catalog.map((product) => {
             const meta = productMetaById(product.id);
-            const isOwned = owned[product.id] || (meta?.kind === "permanent" && !!game.s.perks[product.id]);
+            const permanent = meta?.kind === "permanent" || product.id === VIP_PERK_ID;
+            const isOwned = permanent && (!!owned[product.id] || !!game.s.perks[product.id]);
             const busy = busyId === product.id;
             const done = doneId === product.id;
             const effect = meta ? productEffect(lang, product.id, meta.effect) : "";
@@ -170,14 +175,14 @@ export default function PremiumModal({
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-extrabold text-white">{product.title}</div>
+                  {/* название и описание — из Консоли (SDK), п. 1.13.5; без обрезки на узких экранах */}
+                  <div className="break-words text-[13px] font-extrabold leading-snug text-white">{product.title}</div>
                   <div className="mt-0.5 text-[11px] font-medium leading-snug text-white/50">
                     {product.description || effect}
                   </div>
-                  {meta && (
+                  {product.id === "cash_pile" && (
                     <div className="mt-1 text-[11px] font-bold text-mint/80">
-                      {product.id === "cash_pile" ? fill(t.premium.cashNow, { x: fmtMoney(game.cashPileAmount()) }) : ""}
-                      {effect}
+                      {fill(t.premium.cashNow, { x: fmtMoney(game.cashPileAmount()) }).trim()}
                     </div>
                   )}
                 </div>
