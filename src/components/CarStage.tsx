@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpRight, BadgeDollarSign, Flame, Lock, Sparkles, Trophy } from "lucide-react";
 import { PRESTIGE_BONUS, type CarModel } from "../data/game";
@@ -35,6 +35,15 @@ interface CarStageProps {
   onPrestige: () => void;
   /** Компактный режим для низких окон: без описания, меньше отступы. */
   compact?: boolean;
+  /** Минимальный режим для совсем низких окон (телефон в альбоме, высота < 420 px):
+   *  эпоха и название в одну строку, без подсказки и «пола», блок выкупа в две строки. */
+  tiny?: boolean;
+  /** Второстепенные строки блока выкупа: «баланс / цена» над полосой прогресса и пояснение
+   *  к новому кругу. На узких и низких экранах сумма дублирует шапку (баланс) и кнопку (цена),
+   *  пояснение есть в окне нового круга, а место нужно самому блоку (п. 1.10.1). */
+  ctaDetails?: boolean;
+  /** Сюда сцена кладёт «клик с клавиатуры» — пробел обрабатывается глобально в App (п. 1.6.2.4). */
+  keyClickRef?: React.MutableRefObject<(() => void) | null>;
 }
 
 let floatId = 0;
@@ -43,6 +52,8 @@ let coinId = 0;
 interface Coin {
   id: number;
   x: number;
+  /** высота взлёта — не выше зоны клика, чтобы монетка не залетала под шапку сцены */
+  rise: number;
   text: string;
 }
 
@@ -50,7 +61,6 @@ export default function CarStage({
   model,
   next,
   money,
-  modelIndex,
   botIncome,
   cps,
   critChance,
@@ -62,6 +72,9 @@ export default function CarStage({
   onBuyNext,
   onPrestige,
   compact = false,
+  tiny = false,
+  ctaDetails = true,
+  keyClickRef,
 }: CarStageProps) {
   const { t, lang } = useI18n();
   const { isFine } = useViewport();
@@ -118,6 +131,44 @@ export default function CarStage({
     [doClickAt]
   );
 
+  // Картинка машины вписывается в зону клика по высоте: иначе на невысоких окнах
+  // (например, 1340×754 — iframe платформы) она наезжала на описание модели и
+  // уходила под блок выкупа (п. 1.10.3). Считаем максимум ширины по реальной
+  // высоте зоны: картинка 1200×627 + «пол» под ней (mt-3 + h-5) + запас на покачивание.
+  const [imgMaxW, setImgMaxW] = useState<number | undefined>(undefined);
+  const tinyRef = useRef(tiny);
+  tinyRef.current = tiny;
+  useLayoutEffect(() => {
+    const el = stageRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      const cs = getComputedStyle(el);
+      // в режиме tiny «пола» нет — остаётся только запас на покачивание (8 px)
+      const reserve = tinyRef.current ? 10 : 42;
+      const h = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - reserve;
+      const w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      setImgMaxW(Math.max(tinyRef.current ? 110 : 140, Math.min(768, w, (h * 1200) / 627)));
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // пробел ловит App (глобально), а клик по машине выполняет сцена
+  useEffect(() => {
+    if (!keyClickRef) return;
+    keyClickRef.current = () => {
+      const rect = stageRef.current?.getBoundingClientRect();
+      const x = rect ? rect.width * (0.35 + Math.random() * 0.3) : 200;
+      const y = rect ? rect.height * (0.35 + Math.random() * 0.3) : 200;
+      doClickAt(x, y);
+    };
+    return () => {
+      keyClickRef.current = null;
+    };
+  }, [keyClickRef, doClickAt]);
+
   // авто-флоаты от автокликера — чтобы гараж жил своей жизнью
   useEffect(() => {
     if (botIncome <= 0) return;
@@ -136,10 +187,11 @@ export default function CarStage({
     const iv = setInterval(() => {
       const rect = stageRef.current?.getBoundingClientRect();
       const w = rect?.width ?? 400;
+      const rise = Math.max(40, Math.min(150, (rect?.height ?? 300) * 0.55));
       const id = ++coinId;
       setCoins((c) => [
         ...c.slice(-10),
-        { id, x: w * (0.08 + Math.random() * 0.84), text: `+${fmtMoney(cps * 1.2)}` },
+        { id, x: w * (0.22 + Math.random() * 0.56), rise, text: `+${fmtMoney(cps * 1.2)}` },
       ]);
       setTimeout(() => setCoins((c) => c.filter((x) => x.id !== id)), 1500);
     }, 1200);
@@ -148,6 +200,40 @@ export default function CarStage({
 
   const afford = next ? money >= next.price : false;
   const progress = next ? Math.min(1, money / next.price) : 1;
+
+  const progressBar = (
+    <div className="h-2 overflow-hidden rounded-full bg-white/10">
+      <motion.div
+        className="h-full rounded-full bg-gradient-to-r from-bmw to-bmw-soft"
+        animate={{ width: `${progress * 100}%` }}
+        transition={{ type: "spring", stiffness: 120, damping: 20 }}
+      />
+    </div>
+  );
+
+  const buyButton = next && (
+    <button
+      onClick={onBuyNext}
+      disabled={!afford}
+      className={`tap-min shrink-0 rounded-2xl font-display font-black tracking-wide transition ${
+        tiny ? "px-4 py-2.5 text-[13px]" : compact ? "px-4 py-3.5 text-sm" : "px-6 py-3.5 text-sm"
+      } ${
+        afford
+          ? "shine-btn bg-gradient-to-r from-bmw to-bmw-soft text-white shadow-[0_10px_35px_-8px_rgba(28,105,212,.8)] hover:brightness-110 active:scale-95"
+          : "border border-white/10 bg-white/5 text-white/35"
+      }`}
+    >
+      {afford ? (
+        <span className="flex items-center gap-2">
+          {t.stage.buy} <ArrowUpRight className="size-4" />
+        </span>
+      ) : (
+        <span className="flex items-center gap-2 whitespace-nowrap">
+          <Lock className="size-4" /> {fmtMoney(next.price)}
+        </span>
+      )}
+    </button>
+  );
 
   return (
     <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border border-line bg-panel">
@@ -173,16 +259,21 @@ export default function CarStage({
       </AnimatePresence>
 
       {/* шапка сцены */}
-      <div className={`relative z-10 flex flex-wrap items-start justify-between gap-3 ${compact ? "p-3" : "p-5 sm:p-6"}`}>
-        <div className="min-w-0">
-          <div className="mb-1.5 flex items-center gap-2">
+      <div
+        className={`relative z-10 flex flex-wrap items-start justify-between gap-3 ${
+          tiny ? "px-3 py-2" : compact ? "p-3" : "p-5 sm:p-6"
+        }`}
+      >
+        {/* tiny: эпоха и название в одну строку — экономим высоту для машины и блока выкупа */}
+        <div className={tiny ? "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" : "min-w-0"}>
+          <div className={`flex items-center gap-2 ${tiny ? "" : "mb-1.5"}`}>
             <span
               className="rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.2em]"
               style={{ background: `${model.tint}22`, color: model.tint }}
             >
               {mt.era}
             </span>
-            <span className="text-[11px] font-semibold text-white/40">{mt.years}</span>
+            {!tiny && <span className="text-[11px] font-semibold text-white/40">{mt.years}</span>}
           </div>
           <AnimatePresence mode="wait">
             <motion.h1
@@ -192,7 +283,7 @@ export default function CarStage({
               exit={{ opacity: 0, y: -12 }}
               transition={{ duration: 0.3 }}
               className={`font-display text-balance font-black leading-tight text-white ${
-                compact ? "text-xl" : "text-2xl sm:text-4xl"
+                tiny ? "text-lg" : compact ? "text-xl" : "text-2xl sm:text-4xl"
               }`}
             >
               {model.name}
@@ -230,7 +321,9 @@ export default function CarStage({
         onPointerDown={handlePointer}
         onKeyDown={handleKey}
         tabIndex={0}
-        className="stage-kb relative z-10 flex min-h-[180px] flex-1 cursor-pointer touch-manipulation select-none items-center justify-center p-4 sm:p-6"
+        className={`stage-kb relative z-10 flex flex-1 cursor-pointer touch-manipulation select-none items-center justify-center ${
+          tiny ? "min-h-[80px] p-2" : "min-h-[120px] p-4 sm:p-6"
+        }`}
         role="button"
         aria-label={fill(t.stage.clickAria, { name: model.name })}
       >
@@ -243,6 +336,7 @@ export default function CarStage({
             transition={{ type: "spring", stiffness: 210, damping: 26 }}
             whileTap={{ scale: 0.965 }}
             className="relative w-full max-w-3xl"
+            style={imgMaxW ? { maxWidth: imgMaxW } : undefined}
           >
             <div className="animate-floaty">
               <div
@@ -260,10 +354,12 @@ export default function CarStage({
                 <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-night/45 via-transparent to-transparent" />
               </div>
               {/* отражение-пол */}
-              <div
-                className="mx-auto mt-3 h-5 w-3/4 rounded-[100%] blur-xl transition-colors duration-1000"
-                style={{ background: `radial-gradient(closest-side, ${model.tint}40, transparent)` }}
-              />
+              {!tiny && (
+                <div
+                  className="mx-auto mt-3 h-5 w-3/4 rounded-[100%] blur-xl transition-colors duration-1000"
+                  style={{ background: `radial-gradient(closest-side, ${model.tint}40, transparent)` }}
+                />
+              )}
             </div>
           </motion.div>
         </AnimatePresence>
@@ -275,7 +371,7 @@ export default function CarStage({
             initial={{ opacity: 1, y: 0, scale: f.crit ? 1.4 : f.auto ? 0.9 : 1 }}
             animate={{ opacity: 0, y: -90, scale: f.crit ? 1.6 : f.auto ? 1 : 1.15 }}
             transition={{ duration: 0.9, ease: "easeOut" }}
-            className={`tabular pointer-events-none absolute z-30 font-display font-black ${
+            className={`tabular pointer-events-none absolute z-30 whitespace-nowrap font-display font-black ${
               f.crit
                 ? "text-xl text-gold sm:text-2xl"
                 : f.auto
@@ -298,9 +394,9 @@ export default function CarStage({
           <motion.div
             key={c.id}
             initial={{ opacity: 0, y: 0, scale: 0.7 }}
-            animate={{ opacity: [0, 1, 1, 0], y: -150, scale: 1 }}
+            animate={{ opacity: [0, 1, 1, 0], y: -c.rise, scale: 1 }}
             transition={{ duration: 1.5, ease: "easeOut", times: [0, 0.15, 0.7, 1] }}
-            className="pointer-events-none absolute bottom-6 z-20 flex items-center gap-1"
+            className="pointer-events-none absolute bottom-6 z-20 flex -translate-x-1/2 items-center gap-1 whitespace-nowrap"
             style={{ left: c.x }}
           >
             <span className="grid size-5 place-items-center rounded-full bg-gradient-to-br from-amber-300 to-amber-600 text-[9px] font-black text-amber-950 shadow-[0_0_12px_rgba(245,197,66,.6)]">
@@ -312,10 +408,13 @@ export default function CarStage({
           </motion.div>
         ))}
 
-        <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.28em] text-white/25">
-          {t.stage.clickHint}
-          {isFine && ` · ${t.stage.kbHint}`}
-        </div>
+        {/* в tiny подсказка легла бы на машину; управление объяснено в интро */}
+        {!tiny && (
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 text-center text-[10px] font-bold uppercase leading-snug tracking-[0.22em] text-white/25">
+            {t.stage.clickHint}
+            {isFine && ` · ${t.stage.kbHint}`}
+          </div>
+        )}
 
         {/* крит-инфо */}
         <div className="pointer-events-none absolute left-4 top-2 z-20 flex items-center gap-1.5 rounded-full border border-gold/25 bg-night/50 px-2.5 py-1 backdrop-blur">
@@ -327,50 +426,62 @@ export default function CarStage({
       </div>
 
       {/* CTA выкупа / новый круг */}
-      <div className={`relative z-10 border-t border-line bg-night/60 backdrop-blur ${compact ? "p-3" : "p-4 sm:p-5"}`}>
-        {next ? (
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+      <div
+        className={`relative z-10 border-t border-line bg-night/60 backdrop-blur ${
+          tiny ? "px-3 py-2" : compact ? "p-3" : "p-4 sm:p-5"
+        }`}
+      >
+        {next && tiny ? (
+          // низкий альбом: название во всю ширину, под ним полоса прогресса и кнопка —
+          // в одну строку с кнопкой название переносилось в 3–4 строки и не влезало (п. 1.10.1)
+          <div className="flex flex-col gap-1.5">
+            <div className="break-words text-[11px] font-semibold leading-snug text-white/70">
+              {t.stage.nextLabel}
+              <span className="text-white">{next.name}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">{progressBar}</div>
+              {buyButton}
+            </div>
+          </div>
+        ) : next ? (
+          <div className={`flex gap-3 ${compact ? "flex-row items-center" : "flex-col sm:flex-row sm:items-center"}`}>
             <div className="flex min-w-0 flex-1 items-center gap-3">
               <div className="relative hidden size-14 shrink-0 overflow-hidden rounded-xl border border-white/10 sm:block">
                 <CarImage model={next} className="size-full object-cover" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="mb-1 flex items-center justify-between gap-2 text-[11px] font-semibold">
-                  <span className="truncate text-white/70">
+                {/* без обрезки: при нехватке места сумма переносится на вторую строку (п. 1.10.1) */}
+                <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-[11px] font-semibold">
+                  <span className="min-w-0 break-words text-white/70">
                     {t.stage.nextLabel}
                     <span className="text-white">{next.name}</span>
                   </span>
-                  <span className="tabular shrink-0 text-white/45">
-                    {fmtMoney(money)} <span className="text-white/25">/ {fmtMoney(next.price)}</span>
-                  </span>
+                  {ctaDetails && (
+                    <span className="tabular ml-auto min-w-0 text-right text-white/45">
+                      {fmtMoney(money)} <span className="text-white/25">/ {fmtMoney(next.price)}</span>
+                    </span>
+                  )}
                 </div>
-                <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                  <motion.div
-                    className="h-full rounded-full bg-gradient-to-r from-bmw to-bmw-soft"
-                    animate={{ width: `${progress * 100}%` }}
-                    transition={{ type: "spring", stiffness: 120, damping: 20 }}
-                  />
-                </div>
+                {progressBar}
               </div>
             </div>
+            {buyButton}
+          </div>
+        ) : canPrestige && !ctaDetails ? (
+          // узкий или низкий экран: заголовок строкой, кнопка во всю ширину;
+          // подробности нового круга — в окне подтверждения
+          <div className={`flex flex-col ${tiny ? "gap-1.5" : "gap-2"}`}>
+            <div className="flex items-center justify-center gap-1.5 text-center font-display text-[12px] font-black text-gold">
+              <Trophy className="size-4 shrink-0" />
+              <span className="min-w-0 break-words">{t.stage.allCollected}</span>
+            </div>
             <button
-              onClick={onBuyNext}
-              disabled={!afford}
-              className={`tap-min shrink-0 rounded-2xl px-6 py-3.5 font-display text-sm font-black tracking-wide transition ${
-                afford
-                  ? "shine-btn bg-gradient-to-r from-bmw to-bmw-soft text-white shadow-[0_10px_35px_-8px_rgba(28,105,212,.8)] hover:brightness-110 active:scale-95"
-                  : "border border-white/10 bg-white/5 text-white/35"
-              }`}
+              onClick={onPrestige}
+              className="shine-btn tap-min flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 to-gold px-4 py-2.5 font-display text-[12px] font-black tracking-wide text-night shadow-[0_10px_35px_-8px_rgba(245,197,66,.7)] transition hover:brightness-110 active:scale-95"
             >
-              {afford ? (
-                <span className="flex items-center gap-2">
-                  {t.stage.buy} <ArrowUpRight className="size-4" />
-                </span>
-              ) : (
-                <span className="flex items-center gap-2">
-                  <Lock className="size-4" /> {fmtMoney(next.price)}
-                </span>
-              )}
+              <Sparkles className="size-4 shrink-0" />
+              {fill(t.stage.newLapForever, { p: Math.round(PRESTIGE_BONUS * 100) })}
             </button>
           </div>
         ) : canPrestige ? (
@@ -395,10 +506,6 @@ export default function CarStage({
         ) : null}
       </div>
 
-      {/* индикатор модели */}
-      <div className="pointer-events-none absolute right-5 top-5 z-20 hidden font-display text-[64px] font-black leading-none text-white/[0.04] xl:block">
-        {String(modelIndex + 1).padStart(2, "0")}
-      </div>
     </section>
   );
 }

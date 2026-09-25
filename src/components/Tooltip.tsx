@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 interface TooltipProps {
@@ -26,9 +26,24 @@ export default function Tooltip({
   align = "right",
 }: TooltipProps) {
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  // Положение всплывашки считается по месту: она никогда не вылезает за края
+  // экрана, даже если чип оказался посередине узкого экрана (п. 1.10.1).
+  const [pos, setPos] = useState<{ left: number; width: number; arrow: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open || !wrapRef.current) return;
+    const r = wrapRef.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const width = Math.min(268, vw - 16);
+    const desired = align === "right" ? r.width - width : 0;
+    const left = Math.min(Math.max(desired, 8 - r.left), vw - 8 - width - r.left);
+    const arrow = Math.min(Math.max(r.width / 2 - left - 6, 12), width - 24);
+    setPos({ left, width, arrow });
+  }, [open, align]);
 
   return (
     <div
+      ref={wrapRef}
       className={`relative ${className ?? ""}`}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
@@ -45,16 +60,21 @@ export default function Tooltip({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -6, scale: 0.96 }}
             transition={{ duration: 0.16, ease: "easeOut" }}
-            className={`pointer-events-none absolute top-[calc(100%+10px)] z-50 w-[268px] max-w-[calc(100vw-2rem)] ${
+            className={`pointer-events-none absolute top-[calc(100%+10px)] z-50 w-[268px] max-w-[calc(100vw-1rem)] ${
               align === "right" ? "right-0 origin-top-right" : "left-0 origin-top-left"
             }`}
+            style={pos ? { left: pos.left, right: "auto", width: pos.width } : undefined}
           >
             {/* стрелка */}
             <div
               className={`absolute -top-1.5 size-3 rotate-45 border-l border-t ${
                 align === "right" ? "right-6" : "left-6"
               }`}
-              style={{ borderColor: `${color}45`, background: "#0d131c" }}
+              style={{
+                borderColor: `${color}45`,
+                background: "#0d131c",
+                ...(pos ? { left: pos.arrow, right: "auto" } : null),
+              }}
             />
             <div
               className="overflow-hidden rounded-2xl border shadow-[0_20px_50px_-12px_rgba(0,0,0,.9)] backdrop-blur-xl"

@@ -77,10 +77,13 @@ if (sdkTag) {
 
 // ── 2. Инициализация SDK в коде (п. 1.1) ───────────────────────────
 check("YaGames.init() в коде", html.includes("YaGames.init"), "без инициализации платформа не увидит SDK");
+// п. 1.7: абсолютные URL на серверы S3 Яндекса в коде запрещены — игра,
+// загруженная архивом, подключает SDK только по относительному пути /sdk.js.
+const s3Refs = [...new Set(html.match(/[a-z0-9.-]*s3\.yandex(?:\.net|cloud\.net)?[^"'\s)]*/gi) || [])];
 check(
-  "запасная догрузка SDK (свой домен)",
-  html.includes("sdk.games.s3.yandex.net/sdk.js"),
-  "абсолютный URL из доки для iframe-интеграции"
+  "нет абсолютных URL на серверы S3 Яндекса (п. 1.7)",
+  s3Refs.length === 0,
+  `найдено: ${s3Refs.join(", ")}`
 );
 
 // ── 3. Загрузка и разметка геймплея (п. 1.19.2–1.19.4) ─────────────
@@ -118,8 +121,7 @@ const resourceUrls = [
   ...html.matchAll(/@import\s+["'](https?:\/\/[^"']+)["']/g),
   ...html.matchAll(/\bimport\(\s*["'](https?:\/\/[^"']+)["']/g),
 ].map((m) => m[1]);
-const ALLOWED = new Set(["https://sdk.games.s3.yandex.net/sdk.js"]);
-const forbidden = [...new Set(resourceUrls)].filter((u) => !ALLOWED.has(u));
+const forbidden = [...new Set(resourceUrls)];
 check("нет внешних ресурсов (п. 8.4.2)", forbidden.length === 0, forbidden.join(", "));
 
 // ── 8. Это сборка ДЛЯ Яндекса, а не ПК-версия ─────────────────────

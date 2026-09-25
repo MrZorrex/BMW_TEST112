@@ -48,6 +48,12 @@ interface HeaderProps {
   onOpenPremium?: () => void;
   /** Компактный режим для низких окон (альбомный телефон): меньше высота, без чипов. */
   compact?: boolean;
+  /**
+   * Одна колонка (портрет, узкое окно): в шапке только ключевые чипы — клик, пассив,
+   * буст. Автокликер, крит и круг видны на сцене и в подсказках; иначе шапка
+   * съедала высоту и выталкивала блок выкупа за экран (п. 1.10.1).
+   */
+  slim?: boolean;
 }
 
 export default function Header(p: HeaderProps) {
@@ -62,8 +68,8 @@ export default function Header(p: HeaderProps) {
           p.compact ? "py-1.5" : "py-2.5 sm:py-3"
         }`}
       >
-        {/* Лого + кнопки */}
-        <div className="flex flex-1 items-center gap-3">
+        {/* Лого + кнопки (на десктопе — по содержимому: место отдаём балансу и чипам) */}
+        <div className="flex flex-1 items-center gap-3 sm:flex-none">
           <div
             className={`relative grid shrink-0 place-items-center overflow-hidden rounded-full border border-white/15 bg-gradient-to-br from-bmw-deep to-night ${
               p.compact ? "size-8" : "size-10 sm:size-11"
@@ -108,7 +114,17 @@ export default function Header(p: HeaderProps) {
         </div>
 
         {/* Баланс */}
-        <div className="order-3 mt-1 flex w-full items-end justify-between gap-2 px-1 sm:order-none sm:mt-0 sm:mx-0 sm:w-auto sm:flex-1 sm:justify-center">
+        {/* На узких экранах чипы переносятся под баланс, а не уезжают за край (п. 1.10.1) */}
+        <div
+          className={`flex flex-wrap items-end justify-between gap-x-2 gap-y-1.5 px-1 sm:order-none sm:mt-0 sm:mx-0 sm:w-auto sm:items-center ${
+            // в компактном режиме (низкий альбом) чипов нет — баланс в одной строке с кнопками
+            p.compact ? "order-none ml-auto w-auto items-center" : "order-3 mt-1 w-full"
+          } ${
+            p.slim
+              ? "sm:flex-auto" // не влезает рядом с логотипом — переносится на свою строку целиком
+              : "sm:min-w-0 sm:flex-1 sm:flex-nowrap sm:justify-center"
+          }`}
+        >
           <Tooltip
             color="#ffffff"
             align="left"
@@ -134,7 +150,7 @@ export default function Header(p: HeaderProps) {
           </Tooltip>
 
           {!p.compact && (
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
               {/* Клик */}
               <Tooltip
                 color="#5aa9ff"
@@ -153,7 +169,7 @@ export default function Header(p: HeaderProps) {
                 ]}
                 hint={t.header.clickHint}
               >
-                <div className="flex cursor-help items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-bold text-bmw-soft transition hover:border-bmw/40 hover:bg-bmw/10">
+                <div className="flex cursor-help items-center gap-1.5 whitespace-nowrap rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-bold text-bmw-soft transition hover:border-bmw/40 hover:bg-bmw/10">
                   <MousePointerClick className="size-3.5" />
                   <span className="tabular">+{fmt(p.clickPower)} ₽</span>
                 </div>
@@ -178,7 +194,7 @@ export default function Header(p: HeaderProps) {
               </Tooltip>
 
               {/* Автокликер */}
-              {p.botClicks > 0 && (
+              {p.botClicks > 0 && !p.slim && (
                 <Tooltip
                   color="#5eead4"
                   title={t.header.botTitle}
@@ -189,15 +205,16 @@ export default function Header(p: HeaderProps) {
                   ]}
                   hint={t.header.botHint}
                 >
-                  <div className="flex cursor-help items-center gap-1.5 rounded-full border border-teal-400/25 bg-teal-400/10 px-3 py-1 text-xs font-bold text-teal-300 transition hover:border-teal-400/50">
+                  <div className="flex cursor-help items-center gap-1.5 whitespace-nowrap rounded-full border border-teal-400/25 bg-teal-400/10 px-3 py-1 text-xs font-bold text-teal-300 transition hover:border-teal-400/50">
                     <Bot className="size-3.5" />
                     <span className="tabular">{fmtRate(p.botClicks)} {t.common.clicksPerSec}</span>
                   </div>
                 </Tooltip>
               )}
 
-              {/* Крит */}
+              {/* Крит (кроме широких экранов он уже есть бейджем на сцене — чип не показываем) */}
               <Tooltip
+                className={p.slim ? "hidden" : "hidden xl:block"}
                 color="#f5c542"
                 title={t.header.critTitle}
                 lines={[
@@ -207,7 +224,7 @@ export default function Header(p: HeaderProps) {
                 ]}
                 hint={t.header.critHint}
               >
-                <div className="flex cursor-help items-center gap-1.5 rounded-full border border-gold/25 bg-gold/10 px-3 py-1 text-xs font-bold text-gold transition hover:border-gold/50">
+                <div className="flex cursor-help items-center gap-1.5 whitespace-nowrap rounded-full border border-gold/25 bg-gold/10 px-3 py-1 text-xs font-bold text-gold transition hover:border-gold/50">
                   <Flame className="size-3.5" />
                   <span className="tabular">
                     {Math.round(p.critChance * 100)}% · ×{p.critMult}
@@ -216,7 +233,7 @@ export default function Header(p: HeaderProps) {
               </Tooltip>
 
               {/* Престиж */}
-              {p.prestige > 0 && (
+              {p.prestige > 0 && !p.slim && (
                 <Tooltip
                   color="#f5c542"
                   title={t.header.prestigeTitle}
@@ -227,7 +244,7 @@ export default function Header(p: HeaderProps) {
                   ]}
                   hint={t.header.prestigeHint}
                 >
-                  <div className="flex cursor-help items-center gap-1.5 rounded-full border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-black text-gold transition hover:border-gold/60">
+                  <div className="flex cursor-help items-center gap-1.5 whitespace-nowrap rounded-full border border-gold/30 bg-gold/10 px-3 py-1 text-xs font-black text-gold transition hover:border-gold/60">
                     <Star className="size-3.5" />
                     <span className="tabular">
                       {t.header.lap} {p.prestige + 1} · +{prestigePct}%
@@ -268,7 +285,7 @@ function PassiveChip({ cps }: { cps: number }) {
   }, [cps]);
 
   return (
-    <div className="relative flex cursor-help items-center gap-1.5 overflow-hidden rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-bold text-mint transition hover:border-mint/40 hover:bg-mint/10">
+    <div className="relative flex cursor-help items-center gap-1.5 whitespace-nowrap overflow-hidden rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-bold text-mint transition hover:border-mint/40 hover:bg-mint/10">
       {cps > 0 && (
         <motion.span
           key={pulse}
@@ -299,7 +316,7 @@ function BoostChip({ until, mult }: { until: number; mult: number }) {
   }, []);
   const left = Math.max(0, (until - Date.now()) / 1000);
   return (
-    <div className="flex animate-pulse cursor-help items-center gap-1.5 rounded-full border border-gold/40 bg-gold/15 px-3 py-1 text-xs font-black text-gold">
+    <div className="flex animate-pulse cursor-help items-center gap-1.5 whitespace-nowrap rounded-full border border-gold/40 bg-gold/15 px-3 py-1 text-xs font-black text-gold">
       <Zap className="size-3.5" />
       <span className="tabular">
         ×{mult} · {fmtTime(left)}

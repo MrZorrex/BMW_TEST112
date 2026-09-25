@@ -87,11 +87,13 @@ interface ShopProps {
   onOpenCase: (c: CaseDef) => void;
   onWatchAd: () => void;
   adsEnabled?: boolean;
+  /** Совсем низкое окно (телефон в альбоме): без футера-статистики — место под список. */
+  tiny?: boolean;
 }
 
 type Tab = "models" | "upgrades" | "luck";
 
-export default function Shop({ game, onBuyNext, onOpenCase, onWatchAd, adsEnabled = false }: ShopProps) {
+export default function Shop({ game, onBuyNext, onOpenCase, onWatchAd, adsEnabled = false, tiny = false }: ShopProps) {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("models");
   const { s } = game;
@@ -116,13 +118,14 @@ export default function Shop({ game, onBuyNext, onOpenCase, onWatchAd, adsEnable
           <button
             key={tabDef.id}
             onClick={() => setTab(tabDef.id)}
-            className={`tap-min relative rounded-xl px-2 py-2.5 text-[12px] font-extrabold uppercase tracking-wider transition sm:text-[13px] ${
+            className={`tap-min relative flex min-w-0 flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 rounded-xl px-1.5 py-2 text-[12px] font-extrabold uppercase tracking-wide transition sm:text-[13px] ${
               tab === tabDef.id ? "bg-white/10 text-white" : "text-white/40 hover:bg-white/5 hover:text-white/70"
             }`}
           >
-            {tabDef.label}
+            {/* в узкой панели бейдж переносится под подпись, а не наезжает на соседнюю вкладку (п. 1.10.3) */}
+            <span>{tabDef.label}</span>
             {tabDef.badge && (
-              <span className="ml-1.5 rounded-full bg-bmw/25 px-1.5 py-0.5 text-[9px] font-black text-bmw-soft">
+              <span className="rounded-full bg-bmw/25 px-1.5 py-0.5 text-[9px] font-black leading-none text-bmw-soft">
                 {tabDef.badge}
               </span>
             )}
@@ -138,8 +141,10 @@ export default function Shop({ game, onBuyNext, onOpenCase, onWatchAd, adsEnable
         )}
       </div>
 
-      {/* футер-статистика */}
-      <div className="grid grid-cols-3 divide-x divide-white/5 border-t border-line bg-night/50 text-center">
+      {/* футер-статистика (в низком альбоме скрыт: список покупок важнее) */}
+      <div
+        className={`grid-cols-3 divide-x divide-white/5 border-t border-line bg-night/50 text-center ${tiny ? "hidden" : "grid"}`}
+      >
         {[
           { v: fmt(s.clicks), l: t.shop.statClicks },
           { v: fmt(s.totalEarned) + " ₽", l: t.shop.statEarned },
@@ -172,7 +177,7 @@ function ModelsTab({ game, onBuyNext }: { game: Game; onBuyNext: () => void }) {
         return (
           <div
             key={m.id}
-            className={`flex items-center gap-3 rounded-2xl border p-2 transition ${
+            className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border p-2 transition ${
               current
                 ? "border-bmw/50 bg-bmw/10"
                 : next
@@ -193,8 +198,8 @@ function ModelsTab({ game, onBuyNext }: { game: Game; onBuyNext: () => void }) {
                 </div>
               )}
             </div>
-            <div className="min-w-0 flex-1">
-              <div className={`truncate text-[13px] font-extrabold ${current ? "text-white" : "text-white/80"}`}>
+            <div className="min-w-[7.5rem] flex-1">
+              <div className={`break-words text-[13px] font-extrabold leading-snug ${current ? "text-white" : "text-white/80"}`}>
                 {locked ? "???" : m.name}
               </div>
               <div className="text-[10.5px] font-semibold text-white/35">
@@ -204,7 +209,7 @@ function ModelsTab({ game, onBuyNext }: { game: Game; onBuyNext: () => void }) {
                 <div className="tabular text-[10.5px] font-bold text-mint/80">+{fmt(m.base)} ₽{t.common.perClick}</div>
               )}
             </div>
-            <div className="shrink-0">
+            <div className="ml-auto shrink-0">
               {current && (
                 <span className="rounded-full bg-bmw px-2.5 py-1 text-[9px] font-black uppercase tracking-wider text-white">
                   {t.shop.inGarage}
@@ -259,7 +264,7 @@ function UpgradeRow({
   const owned = levelTotal(def.pct, lv) * model.base * cardMult * game.prestigeMult;
   const unit = kind === "auto" ? ` ₽${t.common.perSec}` : " ₽";
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-2.5 transition hover:border-white/10">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-white/5 bg-white/[0.02] p-2.5 transition hover:border-white/10">
       <div
         className={`grid size-11 shrink-0 place-items-center rounded-xl border ${
           kind === "click" ? "border-bmw/25 bg-bmw/10 text-bmw-soft" : "border-mint/20 bg-mint/10 text-mint"
@@ -267,16 +272,16 @@ function UpgradeRow({
       >
         <Icon className="size-5" />
       </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <span className="truncate text-[13px] font-extrabold text-white/90">{ut.name}</span>
+      <div className="min-w-[7.5rem] flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+          <span className="min-w-0 break-words text-[13px] font-extrabold leading-snug text-white/90">{ut.name}</span>
           {lv > 0 && (
             <span className="shrink-0 rounded bg-white/10 px-1.5 py-px text-[9px] font-black text-white/60">
               {fill(t.common.levelFmt, { lv })}
             </span>
           )}
         </div>
-        <div className="truncate text-[10.5px] font-medium text-white/35">{ut.flavor}</div>
+        <div className="text-[10.5px] font-medium leading-snug text-white/35">{ut.flavor}</div>
         <div className={`tabular text-[10.5px] font-bold ${kind === "click" ? "text-bmw-soft/90" : "text-mint/90"}`}>
           +{fmt(perLevel)}{unit} {t.shop.forNextLevel}
           {lv > 0 && <span className="text-white/30"> {fill(t.shop.nowGain, { x: fmt(owned) })}</span>}
@@ -285,7 +290,7 @@ function UpgradeRow({
       <button
         onClick={() => game.buyUpgrade(def, kind)}
         disabled={!afford}
-        className={`tabular tap-min-sm shrink-0 rounded-xl px-3 py-2 font-display text-[11px] font-black transition ${
+        className={`tabular tap-min-sm ml-auto shrink-0 rounded-xl px-3 py-2 font-display text-[11px] font-black transition ${
           afford
             ? kind === "click"
               ? "bg-gradient-to-r from-bmw to-bmw-soft text-white hover:brightness-110 active:scale-95"
@@ -309,20 +314,20 @@ function BotRow({ def, game }: { def: BotUpgradeDef; game: Game }) {
   const ut = upgradeText(lang, def.id, def);
   const perLevel = levelGain(def.cps, lv) * game.botSpeedMult;
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-2.5 transition hover:border-white/10">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-white/5 bg-white/[0.02] p-2.5 transition hover:border-white/10">
       <div className="grid size-11 shrink-0 place-items-center rounded-xl border border-teal-400/25 bg-teal-400/10 text-teal-300">
         <Icon className="size-5" />
       </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <span className="truncate text-[13px] font-extrabold text-white/90">{ut.name}</span>
+      <div className="min-w-[7.5rem] flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+          <span className="min-w-0 break-words text-[13px] font-extrabold leading-snug text-white/90">{ut.name}</span>
           {lv > 0 && (
             <span className="shrink-0 rounded bg-white/10 px-1.5 py-px text-[9px] font-black text-white/60">
               {fill(t.common.levelFmt, { lv })}
             </span>
           )}
         </div>
-        <div className="truncate text-[10.5px] font-medium text-white/35">{ut.flavor}</div>
+        <div className="text-[10.5px] font-medium leading-snug text-white/35">{ut.flavor}</div>
         <div className="tabular text-[10.5px] font-bold text-teal-300/90">
           +{fmtRate(perLevel)} {t.common.clicksPerSec} {t.shop.forNextLevel}
           {lv > 0 && (
@@ -333,7 +338,7 @@ function BotRow({ def, game }: { def: BotUpgradeDef; game: Game }) {
       <button
         onClick={() => game.buyBot(def)}
         disabled={!afford}
-        className={`tabular tap-min-sm shrink-0 rounded-xl px-3 py-2 font-display text-[11px] font-black transition ${
+        className={`tabular tap-min-sm ml-auto shrink-0 rounded-xl px-3 py-2 font-display text-[11px] font-black transition ${
           afford
             ? "bg-gradient-to-r from-teal-600 to-teal-400 text-night hover:brightness-110 active:scale-95"
             : "border border-white/10 bg-white/5 text-white/35"
@@ -358,24 +363,24 @@ function CritRow({ def, game }: { def: CritUpgradeDef; game: Game }) {
   const perLevel =
     def.id === "critChance" ? fill(t.shop.critChanceStep, { x: stepFmt }) : fill(t.shop.critPowerStep, { x: def.step });
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-2.5 transition hover:border-white/10">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-2xl border border-white/5 bg-white/[0.02] p-2.5 transition hover:border-white/10">
       <div className="grid size-11 shrink-0 place-items-center rounded-xl border border-gold/25 bg-gold/10 text-gold">
         <Icon className="size-5" />
       </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <span className="truncate text-[13px] font-extrabold text-white/90">{ut.name}</span>
+      <div className="min-w-[7.5rem] flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+          <span className="min-w-0 break-words text-[13px] font-extrabold leading-snug text-white/90">{ut.name}</span>
           <span className="shrink-0 rounded bg-white/10 px-1.5 py-px text-[9px] font-black text-white/60">
             {lv}/{def.maxLv}
           </span>
         </div>
-        <div className="truncate text-[10.5px] font-medium text-white/35">{ut.flavor}</div>
+        <div className="text-[10.5px] font-medium leading-snug text-white/35">{ut.flavor}</div>
         <div className="tabular text-[10.5px] font-bold text-gold/90">{perLevel} {t.shop.perLevel}</div>
       </div>
       <button
         onClick={() => game.buyCrit(def)}
         disabled={!afford}
-        className={`tabular tap-min-sm shrink-0 rounded-xl px-3 py-2 font-display text-[11px] font-black transition ${
+        className={`tabular tap-min-sm ml-auto shrink-0 rounded-xl px-3 py-2 font-display text-[11px] font-black transition ${
           afford
             ? "bg-gradient-to-r from-amber-500 to-gold text-night hover:brightness-110 active:scale-95"
             : "border border-white/10 bg-white/5 text-white/35"

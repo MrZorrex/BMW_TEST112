@@ -21,6 +21,7 @@ import {
   gameplayStart,
   gameplayStop,
   getCatalog,
+  isPlatformPaused,
   isPlayerAuthorized,
   isYandex,
   listPurchases,
@@ -63,10 +64,18 @@ function GameUI({ game }: { game: Game }) {
 
   // ── Раскладка под ориентацию и устройство (п. 1.10) ──
   const compact = vp.isShort; // низкое окно: альбомный телефон, сплющенное окно
-  const twoCol = !vp.isNarrow || (compact && vp.w >= 680); // две колонки: десктоп + альбом
+  // две колонки: десктоп и любой невысокий альбом (телефон в альбоме, 568×320 и выше) —
+  // в одну колонку при высоте ~320–400 px сцена не помещалась вместе с блоком выкупа
+  const twoCol = !vp.isNarrow || (compact && vp.w > vp.h);
   const [mobileTab, setMobileTab] = useState<"stage" | "shop">("stage");
-  // на узких невысоких портретах сцена тоже компактная — всё влезает без прокрутки (п. 1.10.4)
-  const stageCompact = compact || (!twoCol && vp.h < 720);
+  // невысокие окна (портрет телефона, десктоп 1024×600 и т. п.) — сцена компактная:
+  // без описания модели, иначе блок выкупа уходит за нижний край (п. 1.10.1, 1.10.4)
+  const stageCompact = compact || vp.h < 720;
+  // совсем низкие окна (телефон в альбоме: 568×320, 640×360, 844×390 …) — сцена в минимальном
+  // виде, иначе блок выкупа уходил за нижний край (п. 1.10.1)
+  const stageTiny = vp.h < 420;
+  // узкий портрет (< 400 px) и низкий альбом: без второстепенных строк в блоке выкупа
+  const ctaDetails = !(stageTiny || (stageCompact && vp.w < 400));
 
   const [unlock, setUnlock] = useState<CarModel | null>(null);
   const [gacha, setGacha] = useState<{ reward: Reward; caseDef: CaseDef } | null>(null);
@@ -80,8 +89,9 @@ function GameUI({ game }: { game: Game }) {
   const [authorized, setAuthorized] = useState(isPlayerAuthorized());
   // показ полноэкранной рекламы — геймплей на паузе (п. 4.7)
   const [adActive, setAdActive] = useState(false);
-  // пауза от платформы: стартовый рекламный блок, окно покупки, смена вкладки (п. 1.19.4)
-  const [platformPaused, setPlatformPaused] = useState(false);
+  // пауза от платформы: стартовый рекламный блок, окно покупки, смена вкладки (п. 1.19.4).
+  // Начальное значение — из SDK: интерфейс может смонтироваться посреди стартовой рекламы.
+  const [platformPaused, setPlatformPaused] = useState(isPlatformPaused);
 
   // ── SDK Яндекс Игр: готовность, разметка геймплея, паузы ──
   useEffect(() => {
@@ -90,6 +100,9 @@ function GameUI({ game }: { game: Game }) {
   }, []);
 
   // ── Инап-покупки: каталог + обработка необработанных покупок (п. 1.13.1) ──
+  // Порядок для каждой покупки: выдать → отметить токен → сохранить (локально и
+  // в облако, с ожиданием) → только потом консумировать. Если сеть оборвётся
+  // посреди процесса, покупка не пропадёт и не выдастся дважды.
   useEffect(() => {
     if (!isYandex()) return;
     void (async () => {
@@ -98,30 +111,26 @@ function GameUI({ game }: { game: Game }) {
       setAuthorized(isPlayerAuthorized());
       const purchases = await listPurchases();
       if (!purchases.length) return;
+      const toConsume: string[] = [];
       let granted = false;
       for (const p of purchases) {
         const meta = productMetaById(p.productID);
         const permanent = meta?.kind === "permanent" || p.productID === VIP_PERK_ID;
-        if (game.isTokenGranted(p.purchaseToken)) {
-          // выдача уже была — повторяться нельзя, только восстанавливаем эффект/консумируем
-          if (permanent) game.grantPerk(p.productID);
-          else await consumeProduct(p.purchaseToken);
+        if (permanent) {
+          // постоянная покупка не консумируется — восстанавливаем эффект (идемпотентно)
+          game.grantPerk(p.productID);
           continue;
         }
-        if (permanent) {
-          game.grantPerk(p.productID); // постоянная покупка — восстанавливаем эффект
-        } else {
-          // расходная покупка без консумации (сбой сети) — выдаём и консумируем
+        if (!game.isTokenGranted(p.purchaseToken)) {
+          // расходная покупка без консумации (сбой сети, обновление страницы) — выдаём
           game.grantCash(game.cashPileAmount());
-          await consumeProduct(p.purchaseToken);
+          game.markTokenGranted(p.purchaseToken);
+          granted = true;
         }
-        game.markTokenGranted(p.purchaseToken);
-        granted = true;
+        toConsume.push(p.purchaseToken);
       }
-      if (granted) {
-        await new Promise((r) => setTimeout(r, 60));
-        game.saveNow(); // п. 1.9 / 1.13.3 — прогресс фиксируем сразу
-      }
+      if (granted) await game.saveNowAndSync(); // п. 1.9 / 1.13.3 — выдача зафиксирована
+      for (const token of toConsume) await consumeProduct(token);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -130,20 +139,54 @@ function GameUI({ game }: { game: Game }) {
   useEffect(() => {
     // геймплей идёт, когда не открыто ни одно модальное окно, нет рекламы и платформа не на паузе
     const inMenu =
-      showIntro || prestigeOpen || !!unlock || !!gacha || premiumOpen || resetOpen || adActive || platformPaused;
+      showIntro ||
+      showOffline ||
+      prestigeOpen ||
+      !!unlock ||
+      !!gacha ||
+      premiumOpen ||
+      resetOpen ||
+      adActive ||
+      platformPaused;
     inMenuRef.current = inMenu;
     if (inMenu) gameplayStop();
     else gameplayStart();
-  }, [showIntro, prestigeOpen, unlock, gacha, premiumOpen, resetOpen, adActive, platformPaused]);
+  }, [showIntro, showOffline, prestigeOpen, unlock, gacha, premiumOpen, resetOpen, adActive, platformPaused]);
+
+  // п. 1.6.2.4 — «Пробел — тоже клик» работает всегда, а не только при фокусе на
+  // сцене: иначе после клика мышью по кнопке магазина пробел нажимал бы эту кнопку.
+  // Коды клавиш (e.code) не зависят от раскладки.
+  const stageKeyClick = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const isTyping = (el: EventTarget | null) =>
+      el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || inMenuRef.current || isTyping(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      stageKeyClick.current?.();
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || inMenuRef.current || isTyping(e.target)) return;
+      e.preventDefault(); // не даём пробелу «нажать» кнопку в фокусе
+      e.stopPropagation();
+    };
+    window.addEventListener("keydown", onDown, true);
+    window.addEventListener("keyup", onUp, true);
+    return () => {
+      window.removeEventListener("keydown", onDown, true);
+      window.removeEventListener("keyup", onUp, true);
+    };
+  }, []);
 
   useEffect(() => {
     // п. 1.3 — при потере фокуса звук останавливается; разметка геймплея — по вкладке
     const suspend = () => {
-      setSoundSuspended(true);
+      setSoundSuspended(true, "focus");
       gameplayStop();
     };
     const resume = () => {
-      setSoundSuspended(false);
+      setSoundSuspended(false, "focus");
       if (!inMenuRef.current) gameplayStart();
     };
     const onVis = () => (document.visibilityState === "hidden" ? suspend() : resume());
@@ -153,26 +196,25 @@ function GameUI({ game }: { game: Game }) {
     document.addEventListener("visibilitychange", onVis);
 
     // п. 1.19.4 — паузы платформы: стартовый рекламный блок (у него нет колбэков!),
-    // окно покупки, сворачивание. Звук и игровой процесс — на паузу (п. 4.7).
-    onPlatformPause(
+    // окно покупки, сворачивание. Звук глушит обёртка SDK, игровой процесс — здесь (п. 4.7).
+    const offPause = onPlatformPause(
       () => {
-        setSoundSuspended(true);
         setPlatformPaused(true);
         game.setPaused(true);
       },
       () => {
-        if (document.visibilityState === "visible") setSoundSuspended(false);
         setPlatformPaused(false);
         game.setPaused(false);
       }
     );
 
-    // смена игрового аккаунта: сохраняем текущий прогресс и перезагружаемся,
-    // чтобы подхватить сохранения вновь выбранного игрока
+    // Смена игрового аккаунта (sdk-events#account-selection-dialog): после выбора
+    // прогресса текущий — уже не актуален. Ничего не пишем, локальную копию
+    // помечаем устаревшей и перезапускаемся — прогресс выбранного игрока придёт из облака.
     onAccountDialog(
       () => {},
       () => {
-        game.saveNow();
+        game.abandonLocal();
         window.location.reload();
       }
     );
@@ -186,6 +228,7 @@ function GameUI({ game }: { game: Game }) {
       window.removeEventListener("focus", resume);
       document.removeEventListener("visibilitychange", onVis);
       document.removeEventListener("contextmenu", onCtx);
+      offPause();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -265,28 +308,30 @@ function GameUI({ game }: { game: Game }) {
   );
 
   // Rewarded Video: смотрит рекламу Яндекса → получает бесплатный контейнер (требование 4.5).
+  // Награда начисляется строго в onRewarded, а анимация открытия запускается
+  // после закрытия рекламы: пока идёт реклама, игровой процесс на паузе (п. 4.7).
   const watchAd = useCallback(() => {
     if (!adsActive || Date.now() < game.s.adReadyAt || adActiveRef.current) return;
     adActiveRef.current = true;
     setAdActive(true); // п. 4.7
     game.setPaused(true);
+    let pending: { reward: Reward; caseDef: CaseDef } | null = null;
+    const finish = () => {
+      adActiveRef.current = false;
+      setAdActive(false);
+      game.setPaused(false);
+      if (pending) setGacha(pending);
+      pending = null;
+    };
     void showRewardedVideo({
       onRewarded: () => {
         game.completeAdWatch();
         const freeCase = CASES[0];
         const r = game.rollCase(freeCase, true);
-        if (r) setGacha({ reward: r, caseDef: freeCase });
+        if (r) pending = { reward: r, caseDef: freeCase };
       },
-      onClose: () => {
-        adActiveRef.current = false;
-        setAdActive(false);
-        game.setPaused(false);
-      },
-      onError: () => {
-        adActiveRef.current = false;
-        setAdActive(false);
-        game.setPaused(false);
-      },
+      onClose: finish,
+      onError: finish,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game.s.adReadyAt, game.completeAdWatch, game.rollCase, adsActive]);
@@ -313,14 +358,14 @@ function GameUI({ game }: { game: Game }) {
     setShowIntro(true);
   }, [game]);
 
-  useEffect(() => {
-    if (!showOffline) return;
-    const t = setTimeout(() => setShowOffline(false), 8000);
-    return () => clearTimeout(t);
-  }, [showOffline]);
+  // п. 1.6.2.2 — на десктопе длинная сторона активного поля не больше двух коротких:
+  // на ультрашироких (21:9) и очень вытянутых окнах поле центрируется, по короткой
+  // стороне оно по-прежнему тянется до края (п. 1.6.2.1). На мобильных — всегда весь экран.
+  const fieldStyle = vp.isFine ? { maxWidth: Math.max(vp.h * 2, 320), maxHeight: Math.max(vp.w * 2, 320) } : undefined;
 
   return (
-    <div className="relative flex h-[100dvh] flex-col overflow-hidden">
+    <div className="flex h-[100dvh] w-full items-center justify-center overflow-hidden">
+    <div className="relative flex h-full w-full flex-col overflow-hidden" style={fieldStyle}>
       <div className="noise-overlay" />
 
       {/* фоновое свечение */}
@@ -353,8 +398,10 @@ function GameUI({ game }: { game: Game }) {
           onReset={() => setResetOpen(true)}
           onOpenPremium={catalog.length > 0 ? () => setPremiumOpen(true) : undefined}
           compact={compact}
+          slim={!twoCol}
         />
-        {!compact && <Timeline modelIndex={s.modelIndex} />}
+        {/* на низких экранах полоса эпох уступает место сцене с блоком выкупа (п. 1.10.1) */}
+        {!compact && !(!twoCol && vp.h < 640) && <Timeline modelIndex={s.modelIndex} />}
       </div>
 
       {/* Игровое поле без прокрутки страницы (п. 1.10.2, 1.10.4):
@@ -365,7 +412,7 @@ function GameUI({ game }: { game: Game }) {
           <div
             className={
               vp.isNarrow
-                ? "grid h-full grid-cols-[minmax(0,1fr)_320px] content-stretch gap-3 p-3"
+                ? "grid h-full grid-cols-[minmax(0,1fr)_minmax(250px,42%)] content-stretch gap-3 p-3"
                 : "mx-auto grid h-full max-w-[1600px] content-stretch gap-3 p-3 sm:gap-4 sm:p-4 lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_440px]"
             }
           >
@@ -385,8 +432,18 @@ function GameUI({ game }: { game: Game }) {
               onBuyNext={buyNext}
               onPrestige={() => setPrestigeOpen(true)}
               compact={stageCompact}
+              tiny={stageTiny}
+              ctaDetails={ctaDetails}
+              keyClickRef={stageKeyClick}
             />
-            <Shop game={game} onBuyNext={buyNext} onOpenCase={openCase} onWatchAd={watchAd} adsEnabled={adsActive} />
+            <Shop
+              game={game}
+              onBuyNext={buyNext}
+              onOpenCase={openCase}
+              onWatchAd={watchAd}
+              adsEnabled={adsActive}
+              tiny={stageTiny}
+            />
           </div>
         ) : (
           <div className="flex h-full flex-col p-3">
@@ -408,9 +465,19 @@ function GameUI({ game }: { game: Game }) {
                   onBuyNext={buyNext}
                   onPrestige={() => setPrestigeOpen(true)}
                   compact={stageCompact}
+                  tiny={stageTiny}
+                  ctaDetails={ctaDetails}
+                  keyClickRef={stageKeyClick}
                 />
               ) : (
-                <Shop game={game} onBuyNext={buyNext} onOpenCase={openCase} onWatchAd={watchAd} adsEnabled={adsActive} />
+                <Shop
+                  game={game}
+                  onBuyNext={buyNext}
+                  onOpenCase={openCase}
+                  onWatchAd={watchAd}
+                  adsEnabled={adsActive}
+                  tiny={stageTiny}
+                />
               )}
             </div>
           </div>
@@ -472,7 +539,7 @@ function GameUI({ game }: { game: Game }) {
             game={game}
             playerAuthorized={authorized}
             onClose={closePremium}
-            onSynced={() => game.saveNow()}
+            onSynced={game.saveNowAndSync}
           />
         )}
         {resetOpen && (
@@ -480,29 +547,10 @@ function GameUI({ game }: { game: Game }) {
         )}
       </AnimatePresence>
 
-      {/* оффлайн-бонус */}
+      {/* оффлайн-бонус: модалка, а не тост — тост на старте перекрывал кнопки (п. 1.10.3) */}
       <AnimatePresence>
         {showOffline && !showIntro && (
-          <motion.div
-            initial={{ opacity: 0, y: 30, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 30, scale: 0.95 }}
-            className="glass fixed bottom-4 left-4 z-40 flex max-w-xs items-center gap-3 rounded-2xl p-4 shadow-2xl"
-          >
-            <div className="grid size-11 shrink-0 place-items-center rounded-xl bg-mint/15 text-mint">
-              <Coins className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="text-[12px] font-extrabold text-white">{t.app.offlineTitle}</div>
-              <div className="tabular text-[12px] font-bold text-mint">{fill(t.app.offlineGain, { x: fmtMoney(game.offlineGain) })}</div>
-            </div>
-            <button
-              onClick={() => setShowOffline(false)}
-              className="tap-min-sm ml-auto grid size-7 shrink-0 place-items-center rounded-lg text-white/40 transition hover:bg-white/10 hover:text-white"
-            >
-              <X className="size-4" />
-            </button>
-          </motion.div>
+          <OfflineModal key="offline" amount={game.offlineGain} onClose={() => setShowOffline(false)} />
         )}
       </AnimatePresence>
 
@@ -517,6 +565,7 @@ function GameUI({ game }: { game: Game }) {
           />
         )}
       </AnimatePresence>
+    </div>
     </div>
   );
 }
@@ -636,6 +685,44 @@ function ResetModal({ onConfirm, onClose }: { onConfirm: () => void; onClose: ()
             {t.app.resetAll}
           </button>
         </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ─── «Пока вас не было» ──────────────────────────────────────
+
+function OfflineModal({ amount, onClose }: { amount: number; onClose: () => void }) {
+  const { t } = useI18n();
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-night/85 p-4 backdrop-blur-lg"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.9, y: 24 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.92, y: 16, opacity: 0 }}
+        transition={{ type: "spring", stiffness: 240, damping: 22 }}
+        onClick={(e) => e.stopPropagation()}
+        className="glass-deep my-auto w-full max-w-[380px] overflow-hidden rounded-3xl p-6 text-center"
+      >
+        <div className="mx-auto grid size-14 place-items-center rounded-3xl border border-mint/30 bg-mint/10">
+          <Coins className="size-7 text-mint" />
+        </div>
+        <h2 className="mt-3 font-display text-lg font-black text-white">{t.app.offlineTitle}</h2>
+        <p className="tabular mt-1.5 break-words font-display text-xl font-black text-mint">
+          {fill(t.app.offlineGain, { x: fmtMoney(amount) })}
+        </p>
+        <button
+          onClick={onClose}
+          className="shine-btn tap-min mt-5 w-full rounded-2xl bg-gradient-to-r from-bmw to-bmw-soft py-3.5 font-display text-sm font-black tracking-wide text-white shadow-[0_10px_35px_-8px_rgba(28,105,212,.8)] transition hover:brightness-110 active:scale-[0.98]"
+        >
+          {t.app.offlineOk}
+        </button>
       </motion.div>
     </motion.div>
   );

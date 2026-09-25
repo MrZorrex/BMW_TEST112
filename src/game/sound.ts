@@ -1,6 +1,13 @@
 let ctx: AudioContext | null = null;
 let enabled = true; // настройка пользователя
-let suspended = false; // системная пауза: потеря фокуса, реклама, пауза платформы
+
+/**
+ * Причины системной паузы звука: потеря фокуса, реклама, пауза платформы.
+ * Звук играет, только когда причин нет: закрытие рекламы не должно включать
+ * звук в свёрнутой вкладке, а возврат фокуса — посреди рекламного блока.
+ */
+export type SuspendReason = "focus" | "ad" | "platform";
+const suspendReasons = new Set<SuspendReason>();
 
 export function setSoundEnabled(v: boolean) {
   enabled = v;
@@ -11,10 +18,13 @@ export function setSoundEnabled(v: boolean) {
  * Требование 1.3: при потере фокуса звук из игры останавливается.
  * Требование 4.7: при показе рекламы звук ставится на паузу.
  */
-export function setSoundSuspended(v: boolean) {
-  suspended = v;
-  if (v) hardSuspend();
+export function setSoundSuspended(v: boolean, reason: SuspendReason = "focus") {
+  if (v) suspendReasons.add(reason);
+  else suspendReasons.delete(reason);
+  if (suspendReasons.size > 0) hardSuspend();
 }
+
+export const isSoundSuspended = () => suspendReasons.size > 0;
 
 function hardSuspend() {
   try {
@@ -25,7 +35,7 @@ function hardSuspend() {
 }
 
 function ac(): AudioContext | null {
-  if (!enabled || suspended || typeof window === "undefined") return null;
+  if (!enabled || suspendReasons.size > 0 || typeof window === "undefined") return null;
   try {
     if (!ctx) ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     if (ctx.state === "suspended") void ctx.resume();

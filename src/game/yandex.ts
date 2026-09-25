@@ -60,7 +60,7 @@ export interface YaSdk {
   isAvailableMethod?(name: string): Promise<boolean>;
   adv?: {
     showFullscreenAdv(opts: { callbacks?: FullscreenCallbacks }): void;
-    showRewardedVideo(opts: RewardedCallbacks): void;
+    showRewardedVideo(opts: { callbacks?: RewardedCallbacks }): void;
   };
 }
 
@@ -85,15 +85,12 @@ declare global {
 }
 
 /**
- * Абсолютный адрес SDK — обязателен при интеграции через свой домен (iframe),
- * дока: https://yandex.ru/dev/games/doc/ru/sdk/sdk-about.html#connect
- *
- * На сервере Яндекса скрипт уже подключён тегом `<script src="/sdk.js">`
- * в index.html, а этот URL — запасной путь: если глобала `YaGames` нет
- * (свой домен, сбой загрузки `/sdk.js`), догружаем SDK динамически —
- * дока называет тег и динамическую загрузку «двумя равноправными способами».
+ * Путь SDK для игр, загруженных архивом на сервер Яндекса, — только
+ * относительный `/sdk.js` (дока: sdk-about#yandex-server). Абсолютные адреса
+ * S3 Яндекса в коде запрещены (п. 1.7), поэтому запасная догрузка использует
+ * тот же относительный путь.
  */
-const SDK_ABS_URL = "https://sdk.games.s3.yandex.net/sdk.js";
+const SDK_REL_URL = "/sdk.js";
 
 /**
  * Промис с таймаутом: висящий вызов SDK не должен вешать старт игры.
@@ -112,22 +109,18 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
 }
 
 /**
- * Гарантирует наличие `window.YaGames`: если тег `/sdk.js` не сработал,
- * динамически подгружаем SDK с абсолютного адреса. true — SDK доступен.
+ * Гарантирует наличие `window.YaGames`. Основной путь — тег `<script src="/sdk.js">`
+ * в `<head>` index.html. Если тег по какой-то причине не отработал (сбой сети),
+ * один раз пробуем догрузить тот же относительный `/sdk.js` динамически — дока
+ * называет тег и динамическую загрузку «двумя равноправными способами».
+ * true — SDK доступен.
  */
 let sdkScriptTried = false;
 
 /**
- * Нужна ли динамическая догрузка SDK.
- *
- * `true` только для продакшен-страницы, загруженной по http(s) — то есть для
- * интеграции через свой домен/iframe, где `/sdk.js` физически нет (дока:
- * sdk-about#iframe). В dev-режиме и при открытии файла двойным кликом (file://)
- * догружать нечего: на официальном локальном запуске Яндекс Игр свой сервер
- * проксирует /sdk.js, и глобал `YaGames` появляется ещё до этого места.
- * Без этой отсечки `npm run dev` без доступа к CDN Яндекса стоял бы на заглушке
- * до 6 с (таймаут скрипта) + 7 с (таймаут init) — а это выглядит как
- * «SDK некорректно встроено» (п. 1.1), хотя проблема только в локальном окружении.
+ * Нужна ли динамическая догрузка SDK: только на странице, открытой по http(s).
+ * В dev-режиме и при открытии файла двойным кликом (file://, ПК-версия)
+ * догружать нечего — игра сразу стартует в офлайн-режиме.
  */
 function shouldLoadSdkDynamically(): boolean {
   if (import.meta.env?.DEV) return false;
@@ -144,7 +137,7 @@ async function ensureSdkScript(): Promise<boolean> {
     await withTimeout(
       new Promise<void>((resolve, reject) => {
         const s = document.createElement("script");
-        s.src = SDK_ABS_URL;
+        s.src = SDK_REL_URL;
         s.async = true;
         s.onload = () => resolve();
         s.onerror = () => reject(new Error("sdk-script-load-failed"));
@@ -300,6 +293,15 @@ export const getPlayerName = () => {
   }
 };
 
+/** Постоянный id игрока (гость или авторизованный) — владелец сохранения. */
+export const getPlayerId = (): string => {
+  try {
+    return player?.getUniqueID() ?? "";
+  } catch {
+    return "";
+  }
+};
+
 export const isPlayerAuthorized = () => {
   try {
     return !!player?.isAuthorized();
@@ -348,6 +350,10 @@ async function doInitYandex(): Promise<boolean> {
     langResolved = true;
     emitSdkLang();
 
+    // Паузы платформы слушаем с первой секунды: стартовая реклама приходит
+    // сразу после init(), ещё до монтирования интерфейса (sdk-events#startup-fullscreen-ad).
+    subscribePlatformPause();
+
     // Надёжное хранилище вместо localStorage (актуально для iOS, п. «Потеря прогресса на iOS»)
     try {
       const safeStorage = await withTimeout(ysdk.getStorage(), 4000, "storage");
@@ -376,10 +382,10 @@ async function doInitYandex(): Promise<boolean> {
  * Требование 1.19.2 — вызывается в момент, когда пользователь может приступить к игре.
  */
 export function loadingReady() {
-  if (readyCalled) return;
+  if (readyCalled || !ysdk) return;
   readyCalled = true;
   try {
-    ysdk?.features?.LoadingAPI?.ready();
+    ysdk.features?.LoadingAPI?.ready();
   } catch {
     /* noop */
   }
@@ -406,14 +412,43 @@ export function gameplayStop() {
   }
 }
 
-/** Требование 1.19.4 — обработка пауз платформы (реклама, сворачивание). */
-export function onPlatformPause(pause: () => void, resume: () => void) {
+// ── Паузы платформы (п. 1.19.4, 4.7) ───────────────────────────
+// game_api_pause / game_api_resume: стартовая реклама, реклама игры, окно
+// покупки, сворачивание. Подписка — сразу после init(), состояние хранится
+// здесь: интерфейс, смонтированный посреди стартовой рекламы, узнаёт о паузе.
+
+let platformPaused = false;
+const pauseListeners = new Set<{ pause: () => void; resume: () => void }>();
+let pauseSubscribed = false;
+
+function subscribePlatformPause() {
+  if (!ysdk || pauseSubscribed) return;
+  pauseSubscribed = true;
   try {
-    ysdk?.on("game_api_pause", pause);
-    ysdk?.on("game_api_resume", resume);
+    ysdk.on("game_api_pause", () => {
+      platformPaused = true;
+      setSoundSuspended(true, "platform");
+      for (const l of [...pauseListeners]) l.pause();
+    });
+    ysdk.on("game_api_resume", () => {
+      platformPaused = false;
+      setSoundSuspended(false, "platform");
+      for (const l of [...pauseListeners]) l.resume();
+    });
   } catch {
     /* noop */
   }
+}
+
+export const isPlatformPaused = () => platformPaused;
+
+/** Подписка на паузы платформы. Если пауза уже идёт — pause() вызывается сразу. */
+export function onPlatformPause(pause: () => void, resume: () => void): () => void {
+  subscribePlatformPause();
+  const l = { pause, resume };
+  pauseListeners.add(l);
+  if (platformPaused) pause();
+  return () => pauseListeners.delete(l);
 }
 
 // ── Смена игрового аккаунта ──────────────────────────────────
@@ -487,23 +522,22 @@ export async function showRewardedVideo(opts: {
 }) {
   try {
     if (!ysdk?.adv) throw new Error("adv unavailable");
-    const cbs: RewardedCallbacks = {
-      onOpen: () => setSoundSuspended(true),
-      onRewarded: opts.onRewarded,
-      onClose: () => {
-        setSoundSuspended(false);
-        opts.onClose?.();
+    ysdk.adv.showRewardedVideo({
+      callbacks: {
+        onOpen: () => setSoundSuspended(true, "ad"),
+        onRewarded: opts.onRewarded,
+        onClose: () => {
+          setSoundSuspended(false, "ad");
+          opts.onClose?.();
+        },
+        onError: (e) => {
+          setSoundSuspended(false, "ad");
+          opts.onError?.(e);
+        },
       },
-      onError: (e) => {
-        setSoundSuspended(false);
-        opts.onError?.(e);
-      },
-    };
-    // Передаём колбэки и плоско, и вложенно в `callbacks`: в разных версиях
-    // документации фигурируют обе формы — так обработчики сработают в любом случае.
-    ysdk.adv.showRewardedVideo({ ...cbs, callbacks: { ...cbs } } as never);
+    });
   } catch (e) {
-    setSoundSuspended(false);
+    setSoundSuspended(false, "ad");
     opts.onError?.(e);
   }
 }
@@ -521,13 +555,13 @@ export async function showInterstitial(opts?: {
     if (!ysdk?.adv) throw new Error("adv unavailable");
     ysdk.adv.showFullscreenAdv({
       callbacks: {
-        onOpen: () => setSoundSuspended(true),
+        onOpen: () => setSoundSuspended(true, "ad"),
         onClose: (wasShown?: boolean) => {
-          setSoundSuspended(false);
+          setSoundSuspended(false, "ad");
           opts?.onClose?.(wasShown);
         },
         onError: (e) => {
-          setSoundSuspended(false);
+          setSoundSuspended(false, "ad");
           opts?.onError?.(e);
         },
       },

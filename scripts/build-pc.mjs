@@ -42,23 +42,10 @@ if (html.length === before) {
   console.warn("! Тег SDK Яндекс Игр не найден — возможно, index.html изменился. Продолжаю как есть.");
 }
 
-// Отключаем динамическую догрузку SDK (ensureSdkScript в src/game/yandex.ts):
-// подменяем абсолютный URL пустышкой data:, чтобы ПК-версия вообще не ходила
-// в сеть и сразу стартовала в офлайн-режиме — без задержки и без кнопок рекламы
-// (на file:// они всё равно нерабочие). Пустой скрипт мгновенно даёт onload,
-// window.YaGames остаётся undefined — игра честно считает себя офлайн.
-const ABS_SDK_URL = "https://sdk.games.s3.yandex.net/sdk.js";
-const OFFLINE_SDK_STUB = "data:text/javascript,void 0";
-// Заменяем ВСЕ вхождения: ссылка живёт в ensureSdkScript (src/game/yandex.ts), но
-// может упомянуться и в комментарии index.html — в сеть не должно уйти ничего.
-const absCount = html.split(ABS_SDK_URL).length - 1;
-if (absCount === 0) {
-  throw new Error(
-    `В бандле не найдена ссылка ${ABS_SDK_URL} (ensureSdkScript в src/game/yandex.ts) — ` +
-      "возможно, интеграция SDK изменилась. ПК-сборка остановлена, чтобы не отдать урезанный файл."
-  );
-}
-html = html.split(ABS_SDK_URL).join(OFFLINE_SDK_STUB);
+// Динамическая догрузка SDK (ensureSdkScript в src/game/yandex.ts) на file://
+// не срабатывает сама: она включается только для страниц, открытых по http(s),
+// и использует тот же относительный путь /sdk.js. Абсолютных адресов SDK
+// в бандле нет (п. 1.7) — вырезать больше ничего не нужно.
 
 // Помечаем файл как ПК-версию — крупно, чтобы его случайно не загрузили
 // в Консоль Яндекс Игр: здесь НЕТ SDK, такой файл получит отказ по п. 1.1.
@@ -71,7 +58,7 @@ html = html.replace(
 // Проверки для запуска через file://
 const problems = [];
 if (/src="\//.test(html) || /href="\//.test(html)) problems.push("найдены абсолютные пути src=\"/…\" / href=\"/…\"");
-if (/yandex\.ru\/games\/sdk/.test(html) || /src="\/sdk\.js"/.test(html) || html.includes(ABS_SDK_URL))
+if (/yandex\.ru\/games\/sdk/.test(html) || /src="\/sdk\.js"/.test(html) || /s3\.yandex/.test(html))
   problems.push("осталась ссылка на SDK Яндекс Игр");
 if (/\/src\/main\.tsx/.test(html)) problems.push("осталась ссылка на исходник /src/main.tsx (сборка не инлайнилась)");
 if (problems.length > 0) {
