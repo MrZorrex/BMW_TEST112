@@ -1,0 +1,13 @@
+{
+  "name": "perekup-bmw-promo-video",
+  "private": true,
+  "description": "Покадровая запись промо-ролика «Перекуп BMW» для Консоли Яндекс Игр",
+  "scripts": {
+    "server": "node server.mjs",
+    "capture": "VW=1152 VH=648 node direct.mjs"
+  },
+  "dependencies": {
+    "@fontsource/roboto": "^5.3.0",
+    "puppeteer-core": "^25.12.0"
+  }
+}

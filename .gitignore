@@ -5,3 +5,7 @@ pc-build/
 publish/
 .DS_Store
 *.log
+# промо-видео: кадры, звук и зависимости записи
+promo/video/tools/work/
+promo/video/tools/node_modules
+__pycache__/
